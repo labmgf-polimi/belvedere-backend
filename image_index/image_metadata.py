@@ -14,6 +14,13 @@ FILENAME_DATETIME_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Fallback for vendor filenames like cam01_canon_rgb_2026_09_01_070000.jpg,
+# where the date is underscore-separated instead of a contiguous YYYYMMDD block.
+FILENAME_DATETIME_RE_ALT = re.compile(
+    r"^.+_(\d{4})_(\d{2})_(\d{2})_(\d{6})\.(jpg|jpeg|png|tif|tiff|webp)$",
+    re.IGNORECASE,
+)
+
 
 def make_aware_if_needed(value):
     if value is None:
@@ -24,16 +31,29 @@ def make_aware_if_needed(value):
 
 
 def parse_datetime_from_filename(filename):
-    match = FILENAME_DATETIME_RE.match(filename or "")
-    if not match:
-        return None
+    filename = filename or ""
 
-    date_part, time_part, _ext = match.groups()
-    try:
-        parsed = dt.strptime(f"{date_part}{time_part}", "%Y%m%d%H%M%S")
-        return make_aware_if_needed(parsed)
-    except ValueError:
-        return None
+    match = FILENAME_DATETIME_RE.match(filename)
+    if match:
+        date_part, time_part, _ext = match.groups()
+        try:
+            return make_aware_if_needed(
+                dt.strptime(f"{date_part}{time_part}", "%Y%m%d%H%M%S")
+            )
+        except ValueError:
+            return None
+
+    match = FILENAME_DATETIME_RE_ALT.match(filename)
+    if match:
+        year, month, day, time_part, _ext = match.groups()
+        try:
+            return make_aware_if_needed(
+                dt.strptime(f"{year}{month}{day}{time_part}", "%Y%m%d%H%M%S")
+            )
+        except ValueError:
+            return None
+
+    return None
 
 
 def parse_datetime_from_exif_dict(exif_data):

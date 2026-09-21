@@ -2,7 +2,7 @@ from datetime import timedelta
 from io import BytesIO
 from unittest.mock import Mock, patch
 
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils.timezone import now as tz_now
@@ -10,6 +10,7 @@ from PIL import Image as PILImage
 from PIL import ImageDraw
 from rest_framework.test import APITestCase
 
+from image_index.image_metadata import parse_datetime_from_filename
 from image_index.models import Camera, Image
 from image_index.views import serve_image, serve_image_preview, serve_image_thumbnail
 
@@ -558,3 +559,64 @@ class IndexS3ImagesCommandTests(TestCase):
         with build_p, get_p as mock_get:
             call_command(self.CMD, camera_id=self.camera.pk, incremental=True)
         mock_get.assert_not_called()
+
+    def test_key_filter_regex_excludes_non_matching_objects(self):
+        """s3_key_filter_regex restricts indexing to keys matching the pattern."""
+        self.camera.s3_key_filter_regex = r"/canon/rgb/"
+        self.camera.save()
+        t = tz_now() - timedelta(hours=1)
+        mock_s3 = self._mock_s3(
+            [
+                {
+                    "Contents": [
+                        self._s3_obj("cam1/canon/rgb/img1.jpg", "abc", t),
+                        self._s3_obj("cam1/pano/rgb/img2.jpg", "def", t),
+                    ]
+                }
+            ]
+        )
+        build_p, get_p = self._patches(mock_s3)
+        with build_p, get_p:
+            call_command(self.CMD, camera_id=self.camera.pk)
+        self.assertTrue(
+            Image.objects.filter(object_key="cam1/canon/rgb/img1.jpg").exists()
+        )
+        self.assertFalse(
+            Image.objects.filter(object_key="cam1/pano/rgb/img2.jpg").exists()
+        )
+
+    def test_inactive_camera_skipped_without_explicit_camera_id(self):
+        """Cron-style runs (no --camera-id) only index active cameras."""
+        self.camera.is_active = False
+        self.camera.save()
+        mock_s3 = self._mock_s3([{"Contents": []}])
+        build_p, get_p = self._patches(mock_s3)
+        with build_p, get_p, self.assertRaises(CommandError):
+            call_command(self.CMD)
+        mock_s3.get_paginator.assert_not_called()
+
+    def test_inactive_camera_still_indexed_with_explicit_camera_id(self):
+        """--camera-id bypasses is_active, for manual/backfill runs."""
+        self.camera.is_active = False
+        self.camera.save()
+        t = tz_now() - timedelta(hours=1)
+        mock_s3 = self._mock_s3(
+            [{"Contents": [self._s3_obj("cam1/img.jpg", "abc", t)]}]
+        )
+        build_p, get_p = self._patches(mock_s3)
+        with build_p, get_p:
+            call_command(self.CMD, camera_id=self.camera.pk)
+        self.assertEqual(Image.objects.filter(camera=self.camera).count(), 1)
+
+
+class ParseDatetimeFromFilenameTests(TestCase):
+    def test_primary_pattern(self):
+        dt = parse_datetime_from_filename("prefix_20260901_070000_anything.jpg")
+        self.assertEqual((dt.year, dt.month, dt.day, dt.hour), (2026, 9, 1, 7))
+
+    def test_alt_pattern_underscore_separated_date(self):
+        dt = parse_datetime_from_filename("cam01_canon_rgb_2026_09_01_070000.jpg")
+        self.assertEqual((dt.year, dt.month, dt.day, dt.hour), (2026, 9, 1, 7))
+
+    def test_no_match_returns_none(self):
+        self.assertIsNone(parse_datetime_from_filename("not_a_timestamped_file.jpg"))

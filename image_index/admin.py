@@ -37,6 +37,7 @@ class CameraAdmin(gis_admin.GISModelAdmin):
         "notes",
         "model",
         "lens",
+        "is_active",
         "installation_date",
         "image_count",
         "min_image_date",
@@ -166,7 +167,8 @@ class YearFilterBase(BaseDateFilter):
 
     def lookups(self, request, model_admin):
         years = (
-            model_admin.model.objects.exclude(**{f"{self.date_field}__isnull": True})
+            model_admin.model.objects
+            .exclude(**{f"{self.date_field}__isnull": True})
             .dates(self.date_field, "year")
             .values_list(f"{self.date_field}__year", flat=True)
         )

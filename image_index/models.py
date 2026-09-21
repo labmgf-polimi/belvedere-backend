@@ -66,6 +66,16 @@ class Camera(models.Model):
         max_length=512,
         help_text="Folder/prefix inside the bucket for this camera, e.g. 'camera-01/' or 'cam-a/'.",
     )
+    s3_key_filter_regex = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text=(
+            "Optional regex (re.search, applied to the full S3 object key) further "
+            "restricting which objects under s3_prefix are indexed for this camera. "
+            "Leave blank to index every object under the prefix."
+        ),
+    )
 
     is_active = models.BooleanField(
         default=True,
