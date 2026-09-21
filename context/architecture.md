@@ -208,9 +208,10 @@ API under `/cams/`: `cameras/`, `images/` (DRF, paginated),
 - `image_index/s3_utils.py`: `build_s3_client()`, `build_readonly_s3_client()`,
   `get_object_bytes()`, `put_object_bytes()`, `generate_presigned_url()` —
   used by both apps
-- `image_index/image_metadata.py`: `IMAGE_EXTENSIONS`, `FILENAME_DATETIME_RE`,
-  `parse_datetime_from_filename()`, `parse_datetime_from_exif_dict()`,
-  `make_json_safe()`, `extract_image_metadata_from_bytes()`
+- `image_index/image_metadata.py`: `IMAGE_EXTENSIONS`, `FILENAME_DATETIME_PATTERNS`
+  (ordered list, first match wins), `parse_datetime_from_filename()`,
+  `parse_datetime_from_exif_dict()`, `make_json_safe()`,
+  `extract_image_metadata_from_bytes()`
 
 ## Infrastructure
 

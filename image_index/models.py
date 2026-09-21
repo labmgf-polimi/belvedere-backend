@@ -14,7 +14,6 @@ from django.contrib.postgres.fields import ArrayField
 
 from georef.constants import ENU_SRID, PROJECT_SRID
 from image_index.image_metadata import (
-    FILENAME_DATETIME_RE,
     parse_datetime_from_exif_dict,
     parse_datetime_from_filename,
 )
@@ -320,8 +319,6 @@ class CameraCalibration(models.Model):
 
 class Image(models.Model):
     """Metadata for each image acquired by the cameras."""
-
-    FILENAME_DATETIME_RE = FILENAME_DATETIME_RE
 
     camera = models.ForeignKey(
         "image_index.Camera",

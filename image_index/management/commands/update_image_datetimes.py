@@ -21,6 +21,14 @@ class Command(BaseCommand):
             "--force", action="store_true", help="Overwrite existing datetimes"
         )
         parser.add_argument(
+            "--filename-only",
+            action="store_true",
+            help=(
+                "Ignore EXIF entirely and derive datetime from the filename only. "
+                "Use for cameras whose EXIF clock is known to be wrong."
+            ),
+        )
+        parser.add_argument(
             "--dry-run", action="store_true", help="Preview changes without saving"
         )
         parser.add_argument("--limit", type=int, help="Max number of images to process")
@@ -40,31 +48,36 @@ class Command(BaseCommand):
         if not qs.exists():
             raise CommandError("No images match the given filters")
 
+        filename_only = options["filename_only"]
         s3 = None
         updated = 0
         skipped = 0
 
         for image in qs:
-            exif = image.exif_data
+            exif = None
             update_exif = False
 
-            if not exif:
-                if s3 is None:
-                    s3 = build_s3_client()
-                try:
-                    image_bytes, _ = get_object_bytes(
-                        s3, image.bucket, image.object_key
-                    )
-                    exif = extract_exif_data_from_bytes(image_bytes)
-                    update_exif = exif is not None
-                except Exception as exc:
-                    self.stderr.write(f"  Cannot fetch {image.object_key}: {exc}")
-                    skipped += 1
-                    continue
+            if filename_only:
+                new_dt = parse_datetime_from_filename(image.filename or image.file_name)
+            else:
+                exif = image.exif_data
+                if not exif:
+                    if s3 is None:
+                        s3 = build_s3_client()
+                    try:
+                        image_bytes, _ = get_object_bytes(
+                            s3, image.bucket, image.object_key
+                        )
+                        exif = extract_exif_data_from_bytes(image_bytes)
+                        update_exif = exif is not None
+                    except Exception as exc:
+                        self.stderr.write(f"  Cannot fetch {image.object_key}: {exc}")
+                        skipped += 1
+                        continue
 
-            new_dt = parse_datetime_from_exif_dict(
-                exif
-            ) or parse_datetime_from_filename(image.filename or image.file_name)
+                new_dt = parse_datetime_from_exif_dict(
+                    exif
+                ) or parse_datetime_from_filename(image.filename or image.file_name)
 
             if new_dt is None:
                 self.stdout.write(f"  No datetime: image={image.id} ({image.filename})")

@@ -9,17 +9,23 @@ from PIL.TiffImagePlugin import IFDRational
 
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp")
 
-FILENAME_DATETIME_RE = re.compile(
-    r"^[^_]+_(\d{8})_(\d{6})_.*\.(jpg|jpeg|png|tif|tiff|webp)$",
-    re.IGNORECASE,
-)
-
-# Fallback for vendor filenames like cam01_canon_rgb_2026_09_01_070000.jpg,
-# where the date is underscore-separated instead of a contiguous YYYYMMDD block.
-FILENAME_DATETIME_RE_ALT = re.compile(
-    r"^.+_(\d{4})_(\d{2})_(\d{2})_(\d{6})\.(jpg|jpeg|png|tif|tiff|webp)$",
-    re.IGNORECASE,
-)
+# Filename datetime patterns, tried in order — first match wins. Each must
+# define the same named groups (y, mo, d, h, mi, s) so they share one parser.
+FILENAME_DATETIME_PATTERNS: list[re.Pattern] = [
+    # Standard filenames like cam01_20260901_070000.jpg, where the date is a contiguous YYYYMMDD block.
+    re.compile(
+        r"^[^_]+_(?P<y>\d{4})(?P<mo>\d{2})(?P<d>\d{2})_"
+        r"(?P<h>\d{2})(?P<mi>\d{2})(?P<s>\d{2})_.*\.(jpg|jpeg|png|tif|tiff|webp)$",
+        re.IGNORECASE,
+    ),
+    # Vendor filenames like cam01_canon_rgb_2026_09_01_070000.jpg, where the
+    # date is underscore-separated instead of a contiguous YYYYMMDD block.
+    re.compile(
+        r"^.+_(?P<y>\d{4})_(?P<mo>\d{2})_(?P<d>\d{2})_"
+        r"(?P<h>\d{2})(?P<mi>\d{2})(?P<s>\d{2})\.(jpg|jpeg|png|tif|tiff|webp)$",
+        re.IGNORECASE,
+    ),
+]
 
 
 def make_aware_if_needed(value):
@@ -33,22 +39,18 @@ def make_aware_if_needed(value):
 def parse_datetime_from_filename(filename):
     filename = filename or ""
 
-    match = FILENAME_DATETIME_RE.match(filename)
-    if match:
-        date_part, time_part, _ext = match.groups()
-        try:
-            return make_aware_if_needed(
-                dt.strptime(f"{date_part}{time_part}", "%Y%m%d%H%M%S")
-            )
-        except ValueError:
-            return None
+    for pattern in FILENAME_DATETIME_PATTERNS:
+        match = pattern.match(filename)
+        if not match:
+            continue
 
-    match = FILENAME_DATETIME_RE_ALT.match(filename)
-    if match:
-        year, month, day, time_part, _ext = match.groups()
+        g = match.groupdict()
         try:
             return make_aware_if_needed(
-                dt.strptime(f"{year}{month}{day}{time_part}", "%Y%m%d%H%M%S")
+                dt.strptime(
+                    f"{g['y']}{g['mo']}{g['d']}{g['h']}{g['mi']}{g['s']}",
+                    "%Y%m%d%H%M%S",
+                )
             )
         except ValueError:
             return None
