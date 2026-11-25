@@ -213,6 +213,10 @@ survey area, `ST_Transform(geom_enu, 32632)` is off by:
   as "RTK SPIN3" stay), the history ("RTK dal 2023, STATICO in precedenza")
   goes to the point's notes as "Survey mode history: ...". "E' un punto FISSO"
   is only checked against `is_fixed`. Dry-run by default; idempotent.
+  **Points list** opens on **active points only** (`PointStatusFilter`,
+  `?status=active|inactive|all`, with a warning naming how many inactive —
+  history — points are hidden); the map and the monograph/CSV exports follow
+  it. The raw-id picker popup (Measurement form) lists all points.
   **Monographs**: `manage.py generate_monographs [--until-year Y]
   [--points ...] [--include-inactive] [--split] [--output DIR]` writes one PDF
   (cover + index, one A4 page per point) from the database only
