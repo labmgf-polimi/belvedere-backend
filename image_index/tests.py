@@ -397,6 +397,9 @@ class PresignedUrlViewTests(TestCase):
         mock_sign.assert_not_called()
 
 
+@override_settings(
+    S3_ENDPOINT_URL="http://fake-s3", S3_ACCESS_KEY="key", S3_SECRET_KEY="secret"
+)
 class IndexS3ImagesCommandTests(TestCase):
     CMD = "index_s3_images"
     BUCKET = "bkt"

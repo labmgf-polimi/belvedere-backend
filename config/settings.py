@@ -1,9 +1,16 @@
+import os
+import sys
 from pathlib import Path
 
-from decouple import config
+from decouple import Config, RepositoryEnv, config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# ENV_FILE replaces .env entirely (e.g. .env.local for the local database), so
+# no production value can leak in. Process environment variables still win.
+if os.environ.get("ENV_FILE"):
+    config = Config(RepositoryEnv(os.environ["ENV_FILE"]))  # noqa: F811
 
 SECRET_KEY = config("SECRET_KEY", default="dev-secret-key")
 DEBUG = config("DEBUG", default=True, cast=bool)
@@ -126,6 +133,19 @@ DATABASES = {
         "OPTIONS": {"options": "-c search_path=public"},
     }
 }
+
+# The test runner creates and drops a test database on whatever server DB_HOST
+# names; never let that be the shared production server by accident.
+if (
+    len(sys.argv) > 1
+    and sys.argv[1] == "test"
+    and DATABASES["default"]["HOST"] not in ("localhost", "127.0.0.1", "::1")
+    and not config("ALLOW_REMOTE_TEST_DB", default=False, cast=bool)
+):
+    sys.exit(
+        f"Refusing to run tests against remote DB_HOST={DATABASES['default']['HOST']}. "
+        "Use scripts/localdb.sh test, or set ALLOW_REMOTE_TEST_DB=True."
+    )
 
 
 # Password validation

@@ -1,0 +1,25 @@
+# Local PostGIS for tests and a working copy of the live database.
+# Pinned by digest: same PostgreSQL 18.4 / PostGIS 3.6.4 / PROJ 9.6.0 as the
+# server, so the georef PROJ checks mean the same thing locally.
+# Driven by scripts/localdb.sh.
+name: belvedere-dev
+
+services:
+  db:
+    image: postgis/postgis:18-3.6@sha256:b410052c6f0d7d37b83cac1369df144e1c843971155dea3317961001704d0a9d
+    environment:
+      POSTGRES_DB: belvedere
+      POSTGRES_USER: belvedere
+      POSTGRES_PASSWORD: belvedere
+    ports:
+      - "127.0.0.1:5442:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U belvedere -d belvedere"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

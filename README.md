@@ -111,3 +111,24 @@ belvedere-backend/
 ## Admin
 
 The Django admin panel is available at `/admin/`. It supports CSV import/export for measurements (via `django-import-export`) and image upload for measurement photos stored in S3.
+
+## Local Development (tests and a copy of the live data)
+
+`compose.dev.yml` runs a PostGIS pinned to the server's exact versions
+(PostgreSQL 18.4, PostGIS 3.6.4, PROJ 9.6.0) on `127.0.0.1:5442`.
+`scripts/localdb.sh` drives it, using `.env.local` (created from
+`.env.local.example`) instead of `.env`, so nothing points at production.
+
+```bash
+scripts/localdb.sh test                   # full test suite on the local database
+scripts/localdb.sh test surveys.tests.X   # a single test
+scripts/localdb.sh pull-live              # overwrite the LOCAL copy with live data (live is only read)
+scripts/localdb.sh run                    # runserver on the local copy
+scripts/localdb.sh manage dbshell         # any manage.py command on the local copy
+scripts/localdb.sh stop
+```
+
+Plain `manage.py test` refuses to run when `DB_HOST` is not local, so the test
+runner never creates databases on the shared server (override with
+`ALLOW_REMOTE_TEST_DB=True`). Tests build their own database from migrations
+and do not need a restored copy.

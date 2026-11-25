@@ -21,8 +21,10 @@ uv sync                                          # install deps
 uv run python manage.py runserver                # dev server
 uv run python manage.py migrate
 uv run python manage.py makemigrations
-uv run python manage.py test                     # all tests
-uv run python manage.py test surveys.tests.TestClass.test_method  # single test
+scripts/localdb.sh test                          # all tests, on the local PostGIS (compose.dev.yml)
+scripts/localdb.sh test surveys.tests.TestClass.test_method  # single test
+scripts/localdb.sh pull-live                     # overwrite the LOCAL copy with live data (live only read)
+scripts/localdb.sh run | manage <cmd>            # work against the local copy (.env.local)
 uv run ruff check . && uv run ruff format .      # lint + format
 uv run python manage.py index_s3_images [--camera-id ID] [--dry-run] [--force] [--workers N]
 uv run python manage.py validate_reference_frame [--srid 990001]   # frame checks (read-only)
@@ -35,6 +37,7 @@ uv run python manage.py collectstatic --noinput  # production
 ## Hard rules
 
 - **Database is fully Django-managed** (single `public` schema). Every schema change — tables **and Postgres views** — goes through a migration. Never apply manual DDL (pgAdmin/QGIS) to project relations.
+- Run tests with `scripts/localdb.sh test`; plain `manage.py test` refuses a non-local `DB_HOST` so test databases are never created on the shared server.
 - The live DB is shared with QGIS users; guard data-touching migrations and take a `pg_dump` before destructive DDL.
 - Three apps (`surveys`, `image_index`, `georef`), one PostgreSQL/PostGIS database. Never split into separate databases.
 - **The local ENU frame (SRID 990001) is immutable once `frozen`.** Never `UPDATE` the origin or offsets of a frozen `georef_reference_frame` row — every coordinate ever stored in that frame would silently change meaning. A correction means a **new SRID**. Enforced by a DB trigger.
