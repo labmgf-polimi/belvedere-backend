@@ -5,6 +5,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.contrib import admin, messages
+from django.contrib.admin.views.main import IS_POPUP_VAR
 from django.contrib.gis import admin as gis_admin
 from django.contrib.gis.forms.widgets import OSMWidget
 from django.core.exceptions import PermissionDenied
@@ -205,6 +206,47 @@ class PointHasPhotosFilter(HasPhotosFilter):
     photos_lookup = "measurement__photos"
 
 
+class PointStatusFilter(admin.SimpleListFilter):
+    """Active points by default; the inactive ones (history) on request.
+
+    The point picker popup (raw_id lookups from the Measurement form) shows
+    all points by default, so old measurements can still be assigned.
+    """
+
+    title = "status"
+    parameter_name = "status"
+
+    def __init__(self, request: HttpRequest, *args, **kwargs) -> None:
+        super().__init__(request, *args, **kwargs)
+        self.default = "all" if IS_POPUP_VAR in request.GET else "active"
+
+    def lookups(self, request: HttpRequest, model_admin) -> list[tuple[str, str]]:
+        return [
+            ("active", "Active"),
+            ("inactive", "Inactive (history)"),
+            ("all", "All points"),
+        ]
+
+    def queryset(self, request: HttpRequest, queryset: QuerySet) -> QuerySet:
+        status = self.value() or self.default
+        if status == "active":
+            return queryset.filter(active=True)
+        if status == "inactive":
+            return queryset.exclude(active=True)  # also points with no flag
+        return queryset
+
+    def choices(self, changelist):
+        current = self.value() or self.default
+        for value, label in self.lookup_choices:
+            yield {
+                "selected": value == current,
+                "query_string": changelist.get_query_string(
+                    {self.parameter_name: value}
+                ),
+                "display": label,
+            }
+
+
 class LastMeasuredFilter(admin.SimpleListFilter):
     """Points by the year of their latest measurement (PointAdmin annotation)."""
 
@@ -380,7 +422,7 @@ class PointAdmin(FieldHelpMixin, ChangeListMapMixin, admin.ModelAdmin):
     )
     search_fields = ("id", "label", "notes")
     list_filter = (
-        "active",
+        PointStatusFilter,
         "is_fixed",
         (
             "measurement__survey__year",
@@ -426,6 +468,25 @@ class PointAdmin(FieldHelpMixin, ChangeListMapMixin, admin.ModelAdmin):
             f"{', '.join(labels)}.",
             messages.WARNING,
         )
+
+    def changelist_view(
+        self, request: HttpRequest, extra_context: dict | None = None
+    ) -> HttpResponse:
+        status = request.GET.get(PointStatusFilter.parameter_name)
+        if (
+            request.method == "GET"
+            and IS_POPUP_VAR not in request.GET
+            and status in (None, "active")
+        ):
+            hidden = Point.objects.exclude(active=True).count()
+            self.message_user(
+                request,
+                f"Showing active points only: {hidden} inactive points (the history "
+                'of the glacier\'s movement) are hidden. Choose "All points" or '
+                '"Inactive (history)" under Status on the right to see them.',
+                messages.WARNING,
+            )
+        return super().changelist_view(request, extra_context)
 
     # --- monographs (see surveys.monographs) ------------------------------
 

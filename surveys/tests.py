@@ -662,6 +662,25 @@ class PointAdminTests(TestCase):
         )
         self.assertContains(response, 'id="field-help"')
 
+    def test_status_filter_defaults_to_active_points(self):
+        Point.objects.create(label="OLD1", active=False, is_fixed=False)
+        url = reverse("admin:surveys_point_changelist")
+
+        def labels(params: dict) -> set[str]:
+            response = self.client.get(url, params)
+            return {p.label for p in response.context["cl"].result_list}
+
+        response = self.client.get(url)
+        self.assertNotIn("OLD1", {p.label for p in response.context["cl"].result_list})
+        self.assertContains(response, "Showing active points only: 1 inactive")
+        self.assertEqual(labels({"status": "inactive"}), {"OLD1"})
+        self.assertIn("OLD1", labels({"status": "all"}))
+        self.assertNotContains(
+            self.client.get(url, {"status": "all"}), "Showing active"
+        )
+        # The point picker of the Measurement form lists every point.
+        self.assertIn("OLD1", labels({"_popup": "1", "_to_field": "id"}))
+
     def test_active_points_view_page_is_gone(self):
         self.assertEqual(
             self.client.get("/admin/surveys/activepoint/").status_code, 404
@@ -1390,7 +1409,7 @@ class MonographAdminTests(MonographTests):
         self.assertIn("monograph_D01bis_", response["Content-Disposition"])
 
         # The list's filters apply to "all points".
-        response = self.client.get(self.url("monographs_pdf"), {"active__exact": "1"})
+        response = self.client.get(self.url("monographs_pdf"), {"status": "active"})
         self.assertTrue(response.content.startswith(b"%PDF"))
         self.assertIn("monographs_", response["Content-Disposition"])
 
