@@ -35,7 +35,7 @@ COLUMN_COMMENTS: dict[str, str] = {
         "plane at D12 plus a 1000 m offset - NOT an altitude."
     ),
     "meas_date": "Date the point was measured.",
-    "meas_time": "Timestamp of the measurement.",
+    "meas_time": "Timestamp of the measurement, stored in UTC (field controller time converted).",
     "meas_strategy": "GNSS method and receiver, e.g. 'RTK SPIN3'.",
     "datum_realization": "Reference frame realization the campaign was processed in.",
     "height_type": "Whether h is ellipsoidal or orthometric. Ellipsoidal everywhere.",
@@ -53,6 +53,9 @@ COLUMN_COMMENTS: dict[str, str] = {
     # `is_fixed`.
     "is_active": "Whether the point is still part of the monitoring network.",
     "ref_date": "Date the point was established.",
+    "target": "Target on the point: colours and fixing, e.g. 'giallo e nero (2 viti)'.",
+    "description": "Where the point is and how to find it.",
+    "survey_mode": "How the point is surveyed with GNSS, e.g. 'RTK RADIO, nRTK (2024)'.",
     # --- surveys ---
     "date": "Campaign date.",
     "year": "Campaign year.",

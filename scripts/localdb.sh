@@ -61,7 +61,7 @@ load_into_local() {
 command=${1:-}
 shift || true
 case $command in
-    test) local_manage test "$@" ;;
+    test) local_manage test --noinput "$@" ;;
     run) local_manage runserver "$@" ;;
     manage) local_manage "$@" ;;
     pull-live) dump_live && load_into_local ;;

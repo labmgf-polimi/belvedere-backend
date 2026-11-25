@@ -16,6 +16,7 @@ nohup.out
 .log/
 .logs/
 _old/
+data/
 
 
 # claude

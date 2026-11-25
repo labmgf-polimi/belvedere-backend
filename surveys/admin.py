@@ -26,6 +26,7 @@ from .models import (
 from .resources import MeasurementResource
 from .sql import COLUMN_COMMENTS as DOC
 from .sql import POINT_MOVEMENTS_COLUMNS, POINT_MOVEMENTS_COMMENTS
+from .utils.photos import FIELD_TIME_ZONE
 
 
 def changelist_geojson(
@@ -525,6 +526,12 @@ class MeasurementAdmin(
         "is_active": DOC["is_active"],
         "photo_count": "Number of photos of this measurement.",
         "enu_coordinates": DOC["geom_enu"],
+        "measured_at": "When the point was measured, local time (Europe/Rome).",
+        "survey_mode": DOC["survey_mode"],
+        "point_target": DOC["target"],
+        "point_description": DOC["description"],
+        "point_survey_mode": DOC["survey_mode"],
+        "point_notes": "Notes on the point (warnings, state of the target).",
     }
 
     # Point and survey columns come through the foreign keys (list_select_related),
@@ -535,6 +542,7 @@ class MeasurementAdmin(
         "survey_year",
         "survey_date",
         "meas_date",
+        "measured_at",
         "east",
         "north",
         "h",
@@ -542,6 +550,7 @@ class MeasurementAdmin(
         "is_fixed",
         "is_active",
         "meas_strategy",
+        "survey_mode",
         "photo_count",
         "created_at",
     )
@@ -566,7 +575,16 @@ class MeasurementAdmin(
     inlines = [MeasurementPhotoInline]
     raw_id_fields = ("point", "survey")
     ordering = ("-survey__year", "point__label", "-meas_date")
-    readonly_fields = ("created_at", "enu_coordinates")
+    readonly_fields = (
+        "created_at",
+        "enu_coordinates",
+        "measured_at",
+        "point_target",
+        "point_description",
+        "point_survey_mode",
+        "point_notes",
+        "point_link",
+    )
 
     @admin.display(description="SRID 990001")
     def enu_coordinates(self, obj) -> str:
@@ -599,6 +617,41 @@ class MeasurementAdmin(
     def is_active(self, obj: Measurement) -> bool | None:
         return obj.point.active
 
+    @admin.display(ordering="meas_time", description="Measured at (local)")
+    def measured_at(self, obj: Measurement) -> str:
+        if obj.meas_time is None:
+            return "-"
+        return f"{obj.meas_time.astimezone(FIELD_TIME_ZONE):%Y-%m-%d %H:%M:%S %Z}"
+
+    @admin.display(ordering="point__survey_mode", description="Survey mode")
+    def survey_mode(self, obj: Measurement) -> str:
+        return obj.point.survey_mode or "-"
+
+    # The point's monograph texts, read-only here: they belong to the point,
+    # not to one measurement (edit them on the point).
+    @admin.display(description="Target")
+    def point_target(self, obj: Measurement) -> str:
+        return obj.point.target or "-"
+
+    @admin.display(description="Description")
+    def point_description(self, obj: Measurement) -> str:
+        return obj.point.description or "-"
+
+    @admin.display(description="Survey mode")
+    def point_survey_mode(self, obj: Measurement) -> str:
+        return obj.point.survey_mode or "-"
+
+    @admin.display(description="Point notes")
+    def point_notes(self, obj: Measurement) -> str:
+        return obj.point.notes or "-"
+
+    @admin.display(description="Edit")
+    def point_link(self, obj: Measurement) -> str:
+        url = reverse("admin:surveys_point_change", args=[obj.point_id])
+        return format_html(
+            '<a href="{}">Edit these texts on point {}</a>', url, obj.point.label
+        )
+
     fieldsets = (
         (
             None,
@@ -607,6 +660,8 @@ class MeasurementAdmin(
                     "point",
                     "survey",
                     "meas_date",
+                    "meas_time",
+                    "measured_at",
                     "meas_strategy",
                     "east",
                     "north",
@@ -620,6 +675,18 @@ class MeasurementAdmin(
                     "notes",
                     "created_at",
                 )
+            },
+        ),
+        (
+            "Point (monograph)",
+            {
+                "fields": (
+                    "point_target",
+                    "point_description",
+                    "point_survey_mode",
+                    "point_notes",
+                    "point_link",
+                ),
             },
         ),
         (

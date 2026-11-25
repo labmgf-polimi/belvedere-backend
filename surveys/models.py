@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 
@@ -15,6 +16,8 @@ from georef.constants import ENU_SRID, PROJECT_SRID
 from image_index.s3_utils import build_s3_storage
 from surveys.sql import COLUMN_COMMENTS as DOC
 from surveys.sql import TABLE_COMMENTS
+
+logger = logging.getLogger(__name__)
 
 # ================ Survey and Instrument Models ================
 
@@ -119,6 +122,21 @@ class Point(models.Model):
     ref_date = models.DateField(blank=True, null=True, db_comment=DOC["ref_date"])
     notes = models.CharField(
         max_length=512, blank=True, null=True, db_comment=DOC["notes"]
+    )
+    # Monograph texts (see import_monograph_texts). `db_default` keeps the
+    # columns insertable from QGIS, which does not know about them.
+    target = models.CharField(
+        max_length=255, blank=True, default="", db_default="", db_comment=DOC["target"]
+    )
+    description = models.TextField(
+        blank=True, default="", db_default="", db_comment=DOC["description"]
+    )
+    survey_mode = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        db_default="",
+        db_comment=DOC["survey_mode"],
     )
     created_at = models.DateTimeField(auto_now_add=True, null=True)
 
@@ -243,7 +261,15 @@ def _delete_photo_file(storage: Storage, name: str) -> None:
 
     Never before: a rolled-back save must not lose a file that is still
     referenced. `robust` logs an S3 failure instead of failing the request.
+
+    Only objects under this environment's prefix are deleted. A local copy of
+    the database shares the bucket with production but uploads under `dev/`;
+    without this, deleting or replacing a photo locally would delete the file
+    production still uses.
     """
+    if not name.startswith(settings.S3_MEASUREMENT_PHOTOS_PREFIX):
+        logger.info("kept %s: outside %s", name, settings.S3_MEASUREMENT_PHOTOS_PREFIX)
+        return
     transaction.on_commit(lambda: storage.delete(name), robust=True)
 
 

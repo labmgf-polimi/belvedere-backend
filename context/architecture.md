@@ -188,6 +188,27 @@ survey area, `ST_Transform(geom_enu, 32632)` is off by:
   files by itself, so the model deletes the old object on replace and a
   `post_delete` receiver deletes it with the row (also on cascade from
   `Measurement`), both in `transaction.on_commit(robust=True)`.
+  Deletes only touch keys under this environment's prefix, so a local copy
+  (uploading under `dev/`) never deletes production's files in the shared bucket.
+  **Field photos**: `manage.py import_point_photos DIR --year YYYY` attaches
+  the controller's `Img_<LABEL>_<DDMMYY>_<HHMMSS>.jpg` photos to that year's
+  measurements (`--alias` for misspelt labels), stored **upright** (EXIF
+  orientation + `rotations.csv` in DIR, degrees counterclockwise, for untagged
+  sideways photos — check the generated `_contact_sheet.jpg`), and sets
+  `meas_time` (UTC) / `meas_date` from the earliest photo, names read as
+  `--tz` (default Europe/Rome: the controller runs on local time). Dry-run by
+  default; idempotent; `--replace-attached`, `--overwrite-times`.
+  `meas_time` is `timestamptz` since `surveys/0033` (the live column was a
+  legacy `timestamp without time zone`).
+  **Monograph texts** (`surveys/0034`): `points.target`, `description`,
+  `survey_mode` (+ `notes` for warnings), with a DB-level default `''` so
+  QGIS inserts still work. Filled from the Publisher monographs by
+  `manage.py import_monograph_texts FILE.pub|.odg ...` (LibreOffice converts
+  `.pub` -> `.odg`, so run it locally; parser in `surveys/utils/publisher.py`
+  handles labels running on inside a paragraph, decomposed accents and
+  "E' un punto FISSO", which is only checked against `is_fixed`). Never
+  overwrites text unless `--overwrite`; clears the CSV import's placeholder
+  note; splits FOTO points' "Target: ... Descrizione: ..." notes.
   Stable URL `/surveys/photos/<id>/` (staff only) redirects to a 15-minute
   presigned link; the admin (inline on the Measurement form, standalone
   photo page) only ever links to it. Local development uses

@@ -557,6 +557,29 @@ class MeasurementMapTests(TestCase):
         titles = [spec.title for spec in response.context["cl"].filter_specs]
         self.assertEqual(titles[:3], ["fixed point", "active point", "survey year"])
 
+    def test_measurement_time_and_point_texts(self):
+        self.client.force_login(self.admin)
+        m = Measurement.objects.order_by("id").first()
+        Measurement.objects.filter(pk=m.pk).update(
+            meas_time=datetime.datetime(2026, 7, 27, 7, 11, 5, tzinfo=datetime.UTC)
+        )
+        Point.objects.filter(pk=m.point_id).update(
+            target="giallo e nero", description="sulla morena", survey_mode="RTK RADIO"
+        )
+        response = self.client.get(reverse("admin:surveys_measurement_changelist"))
+        # Stored in UTC, shown in local (summer) time.
+        self.assertContains(response, "2026-07-27 09:11:05 CEST")
+        self.assertContains(response, "RTK RADIO")
+
+        response = self.client.get(
+            reverse("admin:surveys_measurement_change", args=[m.pk])
+        )
+        for text in ("Point (monograph)", "giallo e nero", "sulla morena", "RTK RADIO"):
+            self.assertContains(response, text)
+        self.assertContains(
+            response, reverse("admin:surveys_point_change", args=[m.point_id])
+        )
+
     def test_view_admin_page_is_gone(self):
         self.client.force_login(self.admin)
         self.assertEqual(
@@ -773,3 +796,365 @@ class MeasurementPhotoTests(TestCase):
         )
         self.assertContains(response, 'name="photos-TOTAL_FORMS"')
         self.assertContains(response, "IMG_0001.JPG")
+
+
+def _photo_bytes(
+    size: tuple[int, int] = (40, 20), orientation: int | None = None
+) -> bytes:
+    """A JPEG with a red top-left corner, optionally EXIF-tagged."""
+    image = PILImage.new("RGB", size, "white")
+    image.paste((255, 0, 0), (0, 0, 8, 8))
+    exif = PILImage.Exif()
+    if orientation:
+        exif[0x0112] = orientation
+    buffer = BytesIO()
+    image.save(buffer, "JPEG", quality=95, exif=exif.tobytes())
+    return buffer.getvalue()
+
+
+class PhotoUtilsTests(TestCase):
+    def test_parse_photo_name_reads_local_time(self):
+        from pathlib import Path
+        from zoneinfo import ZoneInfo
+
+        from surveys.utils.photos import parse_photo_name
+
+        photo = parse_photo_name(
+            Path("Img_D01BIS_270726_091105.jpg"), ZoneInfo("Europe/Rome")
+        )
+        self.assertEqual(photo.label, "D01BIS")
+        # 09:11:05 CEST (UTC+2) is 07:11:05 UTC.
+        self.assertEqual(
+            photo.taken_at.astimezone(datetime.UTC),
+            datetime.datetime(2026, 7, 27, 7, 11, 5, tzinfo=datetime.UTC),
+        )
+        self.assertIsNone(parse_photo_name(Path("notes.txt"), ZoneInfo("UTC")))
+
+    def test_upright_jpeg_applies_exif_then_extra_rotation(self):
+        from surveys.utils.photos import exif_orientation, upright_jpeg
+
+        def opened(data: bytes) -> PILImage.Image:
+            return PILImage.open(BytesIO(data))
+
+        # Tag 6 = "rotate 90 clockwise to display": pixels come out portrait.
+        tagged = upright_jpeg(_photo_bytes(orientation=6))
+        self.assertEqual(opened(tagged).size, (20, 40))
+        self.assertIsNone(exif_orientation(tagged))  # nothing rotates it again
+
+        # Untagged + 90 counterclockwise: the red top-left corner ends bottom-left.
+        turned = opened(upright_jpeg(_photo_bytes(), extra_rotation=90))
+        self.assertEqual(turned.size, (20, 40))
+        red, green, _ = turned.getpixel((2, 37))
+        self.assertGreater(red, 200)
+        self.assertLess(green, 80)
+
+
+@override_settings(
+    S3_ENDPOINT_URL="https://fake-s3.example",
+    S3_ACCESS_KEY="key",
+    S3_SECRET_KEY="secret",
+    S3_SURVEYS_BUCKET_NAME="bkt",
+    S3_MEASUREMENT_PHOTOS_PREFIX="measurement_photos/",
+)
+class ImportPointPhotosTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        survey = Survey.objects.create(date=datetime.date(2026, 7, 26), year=2026)
+        coords = {"east": 416500.0, "north": 5089000.0, "h": 2200.0}
+        cls.m = {
+            label: Measurement.objects.create(
+                point=Point.objects.create(label=label, is_fixed=False, active=True),
+                survey=survey,
+                **coords,
+            )
+            for label in ("S01", "S02", "S03", "S04")
+        }
+        # Already has a time: kept unless --overwrite-times.
+        cls.m["S03"].meas_time = datetime.datetime(
+            2026, 7, 26, 6, 0, tzinfo=datetime.UTC
+        )
+        cls.m["S03"].save()
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        from django.core.files.storage import InMemoryStorage
+
+        field = MeasurementPhoto._meta.get_field("image")
+        original, field.storage = field.storage, InMemoryStorage()
+        self.addCleanup(setattr, field, "storage", original)
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        files = {
+            "Img_S01_270726_091500.jpg": _photo_bytes(),
+            "Img_S01_270726_091105.jpg": _photo_bytes(),  # earlier: gives the time
+            "Img_SS02_280726_100000.jpg": _photo_bytes(orientation=8),  # misspelt
+            "Img_S03_290726_120000.jpg": _photo_bytes(),
+            "Img_NOPE_270726_080000.jpg": _photo_bytes(),  # no such point
+            "notes.txt": b"not a photo",
+        }
+        for name, data in files.items():
+            (self.dir / name).write_bytes(data)
+        (self.dir / "rotations.csv").write_text(
+            "# comment\nImg_S01_270726_091105.jpg, 90\n"
+        )
+
+    def run_command(self, *extra: str) -> str:
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command(
+            "import_point_photos", str(self.dir), "--year", "2026",
+            "--alias", "SS02=S02", *extra, stdout=out,
+        )  # fmt: skip
+        return out.getvalue()
+
+    def refreshed(self, label: str) -> Measurement:
+        return Measurement.objects.get(pk=self.m[label].pk)
+
+    def test_dry_run_changes_nothing(self):
+        output = self.run_command()
+        self.assertIn("dry run", output)
+        self.assertIn("Img_NOPE_270726_080000.jpg", output)  # reported unmatched
+        self.assertIn("S04", output)  # reported without a photo
+        self.assertFalse(MeasurementPhoto.objects.exists())
+        self.assertIsNone(self.refreshed("S01").meas_time)
+        self.assertTrue((self.dir / "_contact_sheet.jpg").exists())
+
+    def test_apply_uploads_upright_photos_and_sets_times(self):
+        self.run_command("--apply")
+        s01 = self.refreshed("S01")
+        self.assertEqual(
+            s01.meas_time, datetime.datetime(2026, 7, 27, 7, 11, 5, tzinfo=datetime.UTC)
+        )
+        self.assertEqual(s01.meas_date, datetime.date(2026, 7, 27))
+        self.assertEqual(s01.photos.count(), 2)
+        rotated = s01.photos.get(file_name="Img_S01_270726_091105.jpg")
+        self.assertEqual(PILImage.open(rotated.image.open()).size, (20, 40))
+        # Alias resolved; EXIF tag 8 applied.
+        s02_photo = self.refreshed("S02").photos.get()
+        self.assertEqual(PILImage.open(s02_photo.image.open()).size, (20, 40))
+        # Existing time kept; the date was empty, so it is filled.
+        s03 = self.refreshed("S03")
+        self.assertEqual(s03.meas_time.hour, 6)
+        self.assertEqual(s03.meas_date, datetime.date(2026, 7, 29))
+
+        # Re-running uploads nothing new.
+        self.assertIn("0 photo(s) uploaded", self.run_command("--apply"))
+        self.assertEqual(MeasurementPhoto.objects.count(), 4)
+
+    def test_replace_attached_reuploads_upright(self):
+        from django.core.files.base import ContentFile
+
+        # An original (sideways, untagged) uploaded earlier through the admin.
+        old = MeasurementPhoto.objects.create(
+            measurement=self.m["S01"],
+            image=ContentFile(_photo_bytes(), name="Img_S01_270726_091105.jpg"),
+        )
+        old_key = old.image.name
+        storage = old.image.storage
+        # Without --replace-attached the original is kept as it is.
+        self.assertIn("1 already attached (kept)", self.run_command("--apply"))
+        self.assertEqual(PILImage.open(storage.open(old_key)).size, (40, 20))  # skipped
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.run_command("--apply", "--replace-attached")
+        old.refresh_from_db()
+        self.assertNotEqual(old.image.name, old_key)
+        self.assertEqual(PILImage.open(old.image.open()).size, (20, 40))
+        self.assertFalse(storage.exists(old_key))  # inside the prefix: deleted
+
+    def test_never_deletes_files_outside_this_prefix(self):
+        from django.core.files.base import ContentFile
+
+        photo = MeasurementPhoto.objects.create(
+            measurement=self.m["S04"], image=ContentFile(_photo_bytes(), name="a.jpg")
+        )
+        storage = photo.image.storage
+        # A production key, as seen from a local copy that uploads under dev/.
+        storage.save("measurement_photos/1/prod.jpg", ContentFile(b"x"))
+        MeasurementPhoto.objects.filter(pk=photo.pk).update(
+            image="measurement_photos/1/prod.jpg"
+        )
+        photo.refresh_from_db()
+        with self.settings(S3_MEASUREMENT_PHOTOS_PREFIX="dev/measurement_photos/"):
+            with self.captureOnCommitCallbacks(execute=True):
+                photo.delete()
+        self.assertTrue(storage.exists("measurement_photos/1/prod.jpg"))
+
+    def test_overwrite_times(self):
+        self.run_command("--apply", "--overwrite-times")
+        self.assertEqual(
+            self.refreshed("S03").meas_time,
+            datetime.datetime(2026, 7, 29, 10, 0, tzinfo=datetime.UTC),
+        )
+
+
+def _odg(path, pages: list[list[str]]) -> None:
+    """A minimal .odg with one draw:page per list of paragraphs."""
+    import zipfile
+    from xml.sax.saxutils import escape
+
+    body = "".join(
+        "<draw:page>"
+        + "".join(f"<text:p>{escape(p)}</text:p>" for p in page)
+        + "</draw:page>"
+        for page in pages
+    )
+    content = (
+        '<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+        'xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" '
+        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">'
+        f"<office:body><office:drawing>{body}</office:drawing></office:body>"
+        "</office:document-content>"
+    )
+    with zipfile.ZipFile(path, "w") as odg:
+        odg.writestr("content.xml", content)
+
+
+HEADER = ["Politecnico di Milano", "Dipartimento di Ingegneria Civile e Ambientale"]
+
+
+class PublisherParserTests(TestCase):
+    def test_fields_and_quirks(self):
+        from surveys.utils.publisher import parse_page
+
+        page = parse_page(
+            ["D38/D38BIS", *HEADER,
+             "Target: giallo e nero, sostituito nel 2026Descrizione: su un masso",
+             "E’ un punto FISSO",
+             # Decomposed "à" and a non-breaking space, as on some real pages.
+             "Modalità di rilievo GNSS: RTK-RADIO",
+             "NOTA: target inclinato",
+             "Non misurato nel 2023",
+             "Coordinate 27-07-2024", "X [m]", "4399847.184"]
+        )  # fmt: skip
+        self.assertEqual(page.labels, ["D38", "D38BIS"])
+        self.assertEqual(page.target, "giallo e nero, sostituito nel 2026")
+        self.assertEqual(page.description, "su un masso")
+        self.assertEqual(page.survey_mode, "RTK-RADIO")
+        self.assertEqual(page.notes, "target inclinato Non misurato nel 2023")
+        self.assertTrue(page.fixed)
+
+    def test_inline_remarks(self):
+        from surveys.utils.publisher import parse_page
+
+        page = parse_page(
+            ["D06", *HEADER,
+             "Target: bianco e nero",
+             "Descrizione: sul lago. E’ un punto FISSO",
+             "E’ un punto FISSO instabile (perdita 7 cm)",
+             "Descrizione2 non esiste. Modalità di rilievo GNSS: RTK"]
+        )  # fmt: skip
+        self.assertEqual(page.description, "sul lago.")  # remark taken out
+        self.assertTrue(page.fixed)
+        self.assertEqual(
+            page.notes,
+            "E’ un punto FISSO instabile (perdita 7 cm) Descrizione2 non esiste.",
+        )
+        self.assertEqual(page.survey_mode, "RTK")
+
+    def test_not_a_point_page(self):
+        from surveys.utils.publisher import parse_page
+
+        self.assertIsNone(
+            parse_page(["Monografie delle mire ottiche", "Redatto nel 2026"])
+        )
+
+    def test_split_labelled_notes(self):
+        from surveys.utils.publisher import split_labelled_notes
+
+        self.assertEqual(
+            split_labelled_notes("Target: chiodo rosso. Descrizione: vicino al D05."),
+            {"notes": "", "target": "chiodo rosso.", "description": "vicino al D05."},
+        )
+        self.assertEqual(split_labelled_notes("punto perso"), {})
+
+
+class ImportMonographTextsTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        def point(label: str, **fields) -> Point:
+            return Point.objects.create(
+                label=label, is_fixed=False, active=True, **fields
+            )
+
+        cls.d01 = point("D01bis")
+        cls.d02 = point("D02", target="già scritto")
+        cls.d63 = point(
+            "D63", notes="Automatically created during measurement CSV import"
+        )
+        cls.foto = point(
+            "FOTO 3", notes="Target: Lago locce. Descrizione: vicino al D05."
+        )
+        cls.other = point("D99", notes="punto perso")
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.odg = Path(tmp.name) / "monografie.odg"
+        _odg(
+            self.odg,
+            [
+                ["Monografie delle mire ottiche"],
+                ["D01BIS", *HEADER, "Target: giallo e nero", "Descrizione: sulla morena",
+                 "Modalità di rilievo GNSS: RTK"],
+                ["D02", *HEADER, "Target: nuovo testo", "Descrizione: altrove"],
+                ["D63", *HEADER, "Target: giallo e blu."],
+                ["D77", *HEADER, "Target: punto sconosciuto"],
+            ],
+        )  # fmt: skip
+
+    def run_command(self, *extra: str) -> str:
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command("import_monograph_texts", str(self.odg), *extra, stdout=out)
+        return out.getvalue()
+
+    def test_dry_run_changes_nothing(self):
+        output = self.run_command()
+        self.assertIn("dry run", output)
+        self.assertIn("D77", output)  # page with no such point
+        self.d01.refresh_from_db()
+        self.assertEqual(self.d01.target, "")
+
+    def test_apply(self):
+        output = self.run_command("--apply")
+        self.d01.refresh_from_db()
+        self.assertEqual(
+            (self.d01.target, self.d01.description, self.d01.survey_mode),
+            ("giallo e nero", "sulla morena", "RTK"),
+        )
+        # Existing text kept, the empty field filled.
+        self.d02.refresh_from_db()
+        self.assertEqual(
+            (self.d02.target, self.d02.description), ("già scritto", "altrove")
+        )
+        self.assertIn("kept existing text", output)
+        # The CSV import's placeholder note is cleared.
+        self.d63.refresh_from_db()
+        self.assertEqual((self.d63.target, self.d63.notes), ("giallo e blu.", ""))
+        # Labelled old notes split into the fields; other notes untouched.
+        self.foto.refresh_from_db()
+        self.assertEqual(
+            (self.foto.target, self.foto.description, self.foto.notes),
+            ("Lago locce.", "vicino al D05.", ""),
+        )
+        self.other.refresh_from_db()
+        self.assertEqual(self.other.notes, "punto perso")
+
+    def test_overwrite(self):
+        self.run_command("--apply", "--overwrite")
+        self.d02.refresh_from_db()
+        self.assertEqual(self.d02.target, "nuovo testo")
