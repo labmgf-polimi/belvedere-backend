@@ -422,6 +422,50 @@ class MeasurementMapTests(TestCase):
         )
 
 
+class PointAdminTests(TestCase):
+    """The Points page shows each point's latest position, list and map."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from django.contrib.auth.models import User
+
+        cls.admin = User.objects.create_superuser("admin", "a@example.com", "pw")
+        s2024 = Survey.objects.create(date=datetime.date(2024, 7, 20), year=2024)
+        s2025 = Survey.objects.create(date=datetime.date(2025, 7, 20), year=2025)
+        cls.point = Point.objects.create(label="D12", active=True, is_fixed=False)
+        Point.objects.create(label="NEW1", active=True, is_fixed=False)  # unmeasured
+        # Entered out of order: "latest" must follow the survey date, not the id.
+        for survey, east in ((s2025, 416010.0), (s2024, 416000.0)):
+            Measurement.objects.create(
+                point=cls.point, survey=survey, east=east, north=5089423.0, h=2121.0
+            )
+
+    def setUp(self):
+        self.client.force_login(self.admin)
+
+    def test_changelist_shows_latest_position_and_map(self):
+        response = self.client.get(reverse("admin:surveys_point_changelist"))
+        self.assertEqual(response.status_code, 200)
+        rows = {p.label: p for p in response.context["cl"].result_list}
+        self.assertEqual(rows["D12"]._last_east, 416010.0)
+        self.assertIsNone(rows["NEW1"]._last_east)
+        for header in ("Last east", "Last north", "Last h"):
+            self.assertContains(response, header)
+
+        features = response.context["map_geojson"]["features"]
+        self.assertEqual(len(features), 1)  # the unmeasured point has no marker
+        props = features[0]["properties"]
+        self.assertEqual((props["label"], props["year"]), ("D12", 2025))
+        self.assertEqual(
+            props["url"], reverse("admin:surveys_point_change", args=[self.point.pk])
+        )
+
+    def test_active_points_view_page_is_gone(self):
+        self.assertEqual(
+            self.client.get("/admin/surveys/activepoint/").status_code, 404
+        )
+
+
 def _jpeg(name: str = "IMG_0001.JPG") -> SimpleUploadedFile:
     """A tiny valid JPEG upload."""
     buffer = BytesIO()

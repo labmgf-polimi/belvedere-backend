@@ -2,7 +2,7 @@ from django.contrib import admin, messages
 from django.contrib.gis import admin as gis_admin
 from django.contrib.gis.forms.widgets import OSMWidget
 from django.db import transaction
-from django.db.models import Count, Max, Min, QuerySet
+from django.db.models import Count, Max, Min, OuterRef, QuerySet, Subquery
 from django.http import HttpRequest, HttpResponse
 from django.urls import reverse
 from django.utils.html import format_html
@@ -11,7 +11,6 @@ from import_export.admin import ImportExportMixin
 from georef.enu import format_enu_point
 
 from .models import (
-    ActivePoint,
     Flight,
     Instrument,
     Measurement,
@@ -26,140 +25,6 @@ from .models import (
     Volume,
 )
 from .resources import MeasurementResource
-
-
-@admin.register(Survey)
-class SurveyAdmin(admin.ModelAdmin):
-    list_display = ("id", "date", "year", "notes")
-    search_fields = ("id", "year", "notes")
-    list_filter = ("year", "date")
-    ordering = ("-year", "-date")
-
-
-@admin.register(Instrument)
-class InstrumentAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "type", "brand", "year_of_m", "reseller")
-    search_fields = ("id", "name", "type", "brand", "reseller")
-    list_filter = ("type", "brand", "year_of_m")
-    ordering = ("name",)
-
-
-@admin.register(SurveyHasInstrument)
-class SurveyHasInstrumentAdmin(admin.ModelAdmin):
-    list_display = ("id", "fk_surveys", "fk_instrum")
-    search_fields = ("id", "fk_surveys__id", "fk_instrum__name", "fk_instrum__brand")
-    list_filter = ("fk_surveys", "fk_instrum")
-    raw_id_fields = ("fk_surveys", "fk_instrum")
-    ordering = ("id",)
-
-
-@admin.register(Flight)
-class FlightAdmin(admin.ModelAdmin):
-    list_display = (
-        "id",
-        "fk_surveys",
-        "camera_name",
-        "n_images",
-        "average_height",
-        "average_gsd",
-        "global_accuracy",
-    )
-    search_fields = ("id", "camera_name", "fk_surveys__id")
-    list_filter = ("fk_surveys", "camera_name")
-    raw_id_fields = ("fk_surveys",)
-    ordering = ("id",)
-
-
-@admin.register(Point)
-class PointAdmin(admin.ModelAdmin):
-    list_display = (
-        "id",
-        "label",
-        "active",
-        "is_fixed",
-        "ref_date",
-        "first_survey_date",
-        "last_survey_date",
-        "num_measurements",
-        "measurements_link",
-        "notes",
-        "created_at",
-    )
-    search_fields = ("id", "label", "notes")
-    list_filter = ("active", "is_fixed", "ref_date")
-    ordering = ("label", "id")
-    readonly_fields = (
-        "created_at",
-        "first_survey_date",
-        "last_survey_date",
-        "num_measurements",
-        "measurements_link",
-    )
-    actions = ("delete_with_measurements",)
-
-    @admin.action(
-        description="Delete selected points AND all their measurements",
-        permissions=["delete"],
-    )
-    def delete_with_measurements(self, request: HttpRequest, queryset):
-        """Deliberate counterpart to the PROTECT on `Measurement.point`.
-
-        The plain delete refuses while measurements exist, which is what keeps
-        a stray click from destroying survey data. This is the explicit way
-        through, and it reports exactly how much was removed.
-        """
-        measurements = Measurement.objects.filter(point__in=queryset)
-        measurement_count = measurements.count()
-        labels = list(queryset.values_list("label", flat=True))
-
-        with transaction.atomic():
-            measurements.delete()
-            point_count, _ = queryset.delete()
-
-        self.message_user(
-            request,
-            f"Deleted {point_count} point(s) and {measurement_count} measurement(s): "
-            f"{', '.join(labels)}.",
-            messages.WARNING,
-        )
-
-    def get_queryset(self, request: HttpRequest) -> QuerySet[Point]:
-        return (
-            super()
-            .get_queryset(request)
-            .annotate(
-                _first_survey_date=Min("measurement__survey__date"),
-                _last_survey_date=Max("measurement__survey__date"),
-                _num_measurements=Count("measurement"),
-            )
-        )
-
-    @admin.display(ordering="_first_survey_date", description="First survey date")
-    def first_survey_date(self, obj: Point):
-        return getattr(obj, "_first_survey_date", None)
-
-    @admin.display(ordering="_last_survey_date", description="Last survey date")
-    def last_survey_date(self, obj: Point):
-        return getattr(obj, "_last_survey_date", None)
-
-    @admin.display(ordering="_num_measurements", description="Measurements")
-    def num_measurements(self, obj: Point):
-        return getattr(obj, "_num_measurements", None)
-
-    @admin.display(description="Measurements")
-    def measurements_link(self, obj: Point):
-        url = reverse("admin:surveys_measurement_changelist")
-        return format_html(
-            '<a href="{}?point__id__exact={}">View measurements</a>',
-            url,
-            obj.pk,
-        )
-
-
-class MapWidget(OSMWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.attrs.update({"map_width": 800, "map_height": 500})
 
 
 def changelist_geojson(
@@ -232,6 +97,181 @@ class ChangeListMapMixin:
                 self.map_max_features,
             )
         return response
+
+
+@admin.register(Survey)
+class SurveyAdmin(admin.ModelAdmin):
+    list_display = ("id", "date", "year", "notes")
+    search_fields = ("id", "year", "notes")
+    list_filter = ("year", "date")
+    ordering = ("-year", "-date")
+
+
+@admin.register(Instrument)
+class InstrumentAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "type", "brand", "year_of_m", "reseller")
+    search_fields = ("id", "name", "type", "brand", "reseller")
+    list_filter = ("type", "brand", "year_of_m")
+    ordering = ("name",)
+
+
+@admin.register(SurveyHasInstrument)
+class SurveyHasInstrumentAdmin(admin.ModelAdmin):
+    list_display = ("id", "fk_surveys", "fk_instrum")
+    search_fields = ("id", "fk_surveys__id", "fk_instrum__name", "fk_instrum__brand")
+    list_filter = ("fk_surveys", "fk_instrum")
+    raw_id_fields = ("fk_surveys", "fk_instrum")
+    ordering = ("id",)
+
+
+@admin.register(Flight)
+class FlightAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "fk_surveys",
+        "camera_name",
+        "n_images",
+        "average_height",
+        "average_gsd",
+        "global_accuracy",
+    )
+    search_fields = ("id", "camera_name", "fk_surveys__id")
+    list_filter = ("fk_surveys", "camera_name")
+    raw_id_fields = ("fk_surveys",)
+    ordering = ("id",)
+
+
+@admin.register(Point)
+class PointAdmin(ChangeListMapMixin, admin.ModelAdmin):
+    # One marker per point at its latest measurement, coloured by that survey's year.
+    map_fields = {
+        "lat": "_last_lat",
+        "lon": "_last_lon",
+        "label": "label",
+        "year": "_last_year",
+        "date": "_last_survey_date",
+        "h": "_last_h",
+    }
+    map_url_name = "admin:surveys_point_change"
+
+    list_display = (
+        "id",
+        "label",
+        "active",
+        "is_fixed",
+        "ref_date",
+        "first_survey_date",
+        "last_survey_date",
+        "last_east",
+        "last_north",
+        "last_h",
+        "num_measurements",
+        "measurements_link",
+        "notes",
+        "created_at",
+    )
+    search_fields = ("id", "label", "notes")
+    list_filter = ("active", "is_fixed", "ref_date")
+    ordering = ("label", "id")
+    readonly_fields = (
+        "created_at",
+        "first_survey_date",
+        "last_survey_date",
+        "num_measurements",
+        "measurements_link",
+    )
+    actions = ("delete_with_measurements",)
+
+    @admin.action(
+        description="Delete selected points AND all their measurements",
+        permissions=["delete"],
+    )
+    def delete_with_measurements(self, request: HttpRequest, queryset):
+        """Deliberate counterpart to the PROTECT on `Measurement.point`.
+
+        The plain delete refuses while measurements exist, which is what keeps
+        a stray click from destroying survey data. This is the explicit way
+        through, and it reports exactly how much was removed.
+        """
+        measurements = Measurement.objects.filter(point__in=queryset)
+        measurement_count = measurements.count()
+        labels = list(queryset.values_list("label", flat=True))
+
+        with transaction.atomic():
+            measurements.delete()
+            point_count, _ = queryset.delete()
+
+        self.message_user(
+            request,
+            f"Deleted {point_count} point(s) and {measurement_count} measurement(s): "
+            f"{', '.join(labels)}.",
+            messages.WARNING,
+        )
+
+    def get_queryset(self, request: HttpRequest) -> QuerySet[Point]:
+        # Latest measurement = most recent survey date, as in the active_points view.
+        latest = Measurement.objects.filter(point=OuterRef("pk")).order_by(
+            "-survey__date", "-id"
+        )
+        return (
+            super()
+            .get_queryset(request)
+            .annotate(
+                _first_survey_date=Min("measurement__survey__date"),
+                _last_survey_date=Max("measurement__survey__date"),
+                _num_measurements=Count("measurement"),
+                **{
+                    f"_last_{field}": Subquery(latest.values(lookup)[:1])
+                    for field, lookup in (
+                        ("east", "east"),
+                        ("north", "north"),
+                        ("h", "h"),
+                        ("lat", "lat"),
+                        ("lon", "lon"),
+                        ("year", "survey__year"),
+                    )
+                },
+            )
+        )
+
+    @admin.display(ordering="_last_east", description="Last east")
+    def last_east(self, obj: Point) -> float | None:
+        return getattr(obj, "_last_east", None)
+
+    @admin.display(ordering="_last_north", description="Last north")
+    def last_north(self, obj: Point) -> float | None:
+        return getattr(obj, "_last_north", None)
+
+    @admin.display(ordering="_last_h", description="Last h")
+    def last_h(self, obj: Point) -> float | None:
+        return getattr(obj, "_last_h", None)
+
+    @admin.display(ordering="_first_survey_date", description="First survey date")
+    def first_survey_date(self, obj: Point):
+        return getattr(obj, "_first_survey_date", None)
+
+    @admin.display(ordering="_last_survey_date", description="Last survey date")
+    def last_survey_date(self, obj: Point):
+        return getattr(obj, "_last_survey_date", None)
+
+    @admin.display(ordering="_num_measurements", description="Measurements")
+    def num_measurements(self, obj: Point):
+        return getattr(obj, "_num_measurements", None)
+
+    @admin.display(description="Measurements")
+    def measurements_link(self, obj: Point):
+        url = reverse("admin:surveys_measurement_changelist")
+        return format_html(
+            '<a href="{}?point__id__exact={}">View measurements</a>',
+            url,
+            obj.pk,
+        )
+
+
+class MapWidget(OSMWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.attrs.update({"map_width": 800, "map_height": 500})
 
 
 def photo_preview(photo: MeasurementPhoto | None) -> str:
@@ -500,18 +540,3 @@ class PointsMovementRawAdmin(PointsMovementAdmin):
 @admin.register(PointsMovementFiltered)
 class PointsMovementFilteredAdmin(PointsMovementAdmin):
     pass
-
-
-@admin.register(ActivePoint)
-class ActivePointAdmin(ReadOnlyViewAdmin):
-    list_display = (
-        "label",
-        "last_measure_date",
-        "east",
-        "north",
-        "h",
-        "is_fixed",
-    )
-    search_fields = ("label",)
-    list_filter = ("is_fixed",)
-    ordering = ("label",)
