@@ -108,7 +108,9 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
         }).addTo(group);
         L.geoJSON({ type: "FeatureCollection", features }, {
           pointToLayer: (f, latlng) => dot(latlng, colour, 5),
-          style: () => ({ color: colour, weight: 2, opacity: 1, lineCap: "round" }),
+          // Leaflet applies `style` to point markers too: style the lines only,
+          // or the dots lose their outline.
+          style: f => (isLine(f) ? { color: colour, weight: 2, opacity: 1, lineCap: "round" } : {}),
           onEachFeature: (f, layer) => layer.bindPopup(popup(f)).bindTooltip(tooltip(f)),
         }).addTo(group);
         for (const f of features.filter(isLine)) {
