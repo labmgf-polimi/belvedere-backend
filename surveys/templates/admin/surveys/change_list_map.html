@@ -68,12 +68,12 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
         colourOf = k => palette[keys.indexOf(k) % palette.length];
       }
 
-      // Rings and casings keep the marks readable on satellite imagery: dark
-      // for the velocity scale (its bright yellow end), white for the rest.
-      const ring = classes ? "#1b1b1b" : "#fff";
-      const dot = (latlng, colour, radius) => L.circleMarker(latlng, {
-        radius, weight: classes ? 1.5 : 2, color: ring, fillColor: colour, fillOpacity: 1,
-      });
+      // Point maps (measurements, points): thin black outline, as originally.
+      // Movement map: a dark ring so its near-white slow class reads on debris.
+      const ring = classes ? "#1b1b1b" : "#000";
+      const dot = (latlng, colour, radius) => L.circleMarker(latlng, classes
+        ? { radius, weight: 1.5, color: ring, fillColor: colour, fillOpacity: 1 }
+        : { radius, weight: 1, color: ring, fillColor: colour, fillOpacity: 0.9 });
       function popup(f) {
         const p = f.properties;
         const a = document.createElement("a");
