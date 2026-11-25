@@ -365,7 +365,7 @@ class MeasurementMapTests(TestCase):
         from surveys.admin import ChangeListMapMixin, changelist_geojson
 
         geojson = changelist_geojson(
-            PointsMeasurement.objects.all(),
+            Measurement.objects.all(),
             ChangeListMapMixin.map_fields,
             ChangeListMapMixin.map_url_name,
             limit=10,
@@ -378,33 +378,48 @@ class MeasurementMapTests(TestCase):
         self.assertAlmostEqual(lat, 45.96, delta=0.02)
         self.assertAlmostEqual(lon, 7.93, delta=0.02)
 
-    def test_changelist_maps_follow_filters(self):
+    def test_changelist_map_follows_filters(self):
         self.client.force_login(self.admin)
-        cases = (
-            (
-                "admin:surveys_measurement_changelist",
-                "survey__id__exact",
-                self.s2024.pk,
-            ),
-            ("admin:surveys_pointsmeasurement_changelist", "survey_year", 2024),
-        )
-        for url_name, filter_key, filter_value in cases:
-            with self.subTest(url_name):
-                url = reverse(url_name)
-                response = self.client.get(url)
-                self.assertEqual(response.status_code, 200)
-                self.assertContains(response, 'id="changelist-map-geojson"')
-                features = response.context["map_geojson"]["features"]
-                self.assertEqual(len(features), 2)
-                # Popups link to the editable measurement, also from the view.
-                self.assertIn("/surveys/measurement/", features[0]["properties"]["url"])
-
-                response = self.client.get(url, {filter_key: filter_value})
-                self.assertEqual(len(response.context["map_geojson"]["features"]), 1)
-
+        url = reverse("admin:surveys_measurement_changelist")
+        response = self.client.get(url)
+        self.assertContains(response, 'id="changelist-map-geojson"')
+        features = response.context["map_geojson"]["features"]
+        self.assertEqual(len(features), 2)
+        self.assertIn("/surveys/measurement/", features[0]["properties"]["url"])
         # The mixin's template must not drop the import-export buttons.
-        response = self.client.get(reverse("admin:surveys_measurement_changelist"))
         self.assertContains(response, reverse("admin:surveys_measurement_import"))
+
+        response = self.client.get(url, {"survey__year": 2024})
+        self.assertEqual(len(response.context["map_geojson"]["features"]), 1)
+
+    def test_changelist_shows_point_and_survey_columns(self):
+        """Everything the removed points_measurements page listed is here."""
+        self.client.force_login(self.admin)
+        url = reverse("admin:surveys_measurement_changelist")
+        response = self.client.get(url)
+        for header in (
+            "Label",
+            "Survey year",
+            "Survey date",
+            "H orto",
+            "Fixed",
+            "Active",
+        ):
+            self.assertContains(response, header)
+        self.assertContains(response, "July 20, 2024")  # survey_date column
+
+        response = self.client.get(url, {"point__is_fixed__exact": "1"})
+        self.assertEqual(response.context["cl"].result_count, 0)
+        response = self.client.get(url, {"point__active__exact": "1"})
+        self.assertEqual(response.context["cl"].result_count, 2)
+        titles = [spec.title for spec in response.context["cl"].filter_specs]
+        self.assertEqual(titles[:3], ["fixed point", "active point", "survey year"])
+
+    def test_view_admin_page_is_gone(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(
+            self.client.get("/admin/surveys/pointsmeasurement/").status_code, 404
+        )
 
 
 def _jpeg(name: str = "IMG_0001.JPG") -> SimpleUploadedFile:

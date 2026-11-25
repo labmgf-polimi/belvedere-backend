@@ -17,7 +17,6 @@ from .models import (
     Measurement,
     MeasurementPhoto,
     Point,
-    PointsMeasurement,
     PointsMovementFiltered,
     PointsMovementRaw,
     Product2D,
@@ -211,12 +210,11 @@ class ChangeListMapMixin:
     map_fields: dict[str, str] = {
         "lat": "lat",
         "lon": "lon",
-        "label": "label",
-        "year": "survey_year",
+        "label": "point__label",
+        "year": "survey__year",
         "date": "meas_date",
         "h": "h",
     }
-    # Popups link to the editable measurement, also from the read-only views.
     map_url_name: str = "admin:surveys_measurement_change"
     map_max_features: int = 5000
 
@@ -265,6 +263,17 @@ class MeasurementPhotoInline(admin.TabularInline):
         return photo_preview(obj)
 
 
+def titled_filter(base: type[admin.FieldListFilter], title: str) -> type:
+    """`base` with a custom sidebar title (Django uses the field name)."""
+
+    class TitledFilter(base):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.title = title
+
+    return TitledFilter
+
+
 class HasPhotosFilter(admin.SimpleListFilter):
     title = "photos"
     parameter_name = "has_photos"
@@ -286,24 +295,26 @@ class MeasurementAdmin(ChangeListMapMixin, ImportExportMixin, gis_admin.GISModel
     import_template_name = "admin/surveys/import_measurement.html"
     gis_widget = MapWidget
     # import-export wraps the mixin's change_list_template, so its buttons stay.
-    map_fields = {
-        **ChangeListMapMixin.map_fields,
-        "label": "point__label",
-        "year": "survey__year",
-    }
 
+    # Point and survey columns come through the foreign keys (list_select_related),
+    # so this page covers everything the points_measurements view showed.
     list_display = (
         "id",
-        "point",
-        "survey",
+        "label",
+        "survey_year",
+        "survey_date",
         "meas_date",
         "east",
         "north",
         "h",
+        "h_orto",
+        "is_fixed",
+        "is_active",
         "meas_strategy",
         "photo_count",
         "created_at",
     )
+    list_select_related = ("point", "survey")
     search_fields = (
         "id",
         "point__label",
@@ -312,10 +323,18 @@ class MeasurementAdmin(ChangeListMapMixin, ImportExportMixin, gis_admin.GISModel
         "notes",
         "meas_strategy",
     )
-    list_filter = ("survey", "meas_date", "meas_strategy", HasPhotosFilter)
+    list_filter = (
+        ("point__is_fixed", titled_filter(admin.BooleanFieldListFilter, "fixed point")),
+        ("point__active", titled_filter(admin.BooleanFieldListFilter, "active point")),
+        ("survey__year", titled_filter(admin.AllValuesFieldListFilter, "survey year")),
+        "survey",
+        "meas_date",
+        "meas_strategy",
+        HasPhotosFilter,
+    )
     inlines = [MeasurementPhotoInline]
     raw_id_fields = ("point", "survey")
-    ordering = ("-meas_date", "-id")
+    ordering = ("-survey__year", "point__label", "-meas_date")
     readonly_fields = ("created_at", "enu_coordinates")
 
     @admin.display(description="SRID 990001")
@@ -328,6 +347,26 @@ class MeasurementAdmin(ChangeListMapMixin, ImportExportMixin, gis_admin.GISModel
     @admin.display(ordering="_photo_count", description="Photos")
     def photo_count(self, obj: Measurement) -> int:
         return getattr(obj, "_photo_count", 0)
+
+    @admin.display(ordering="point__label", description="Label")
+    def label(self, obj: Measurement) -> str:
+        return obj.point.label
+
+    @admin.display(ordering="survey__year", description="Survey year")
+    def survey_year(self, obj: Measurement) -> int | None:
+        return obj.survey.year
+
+    @admin.display(ordering="survey__date", description="Survey date")
+    def survey_date(self, obj: Measurement):
+        return obj.survey.date
+
+    @admin.display(boolean=True, ordering="point__is_fixed", description="Fixed")
+    def is_fixed(self, obj: Measurement) -> bool | None:
+        return obj.point.is_fixed
+
+    @admin.display(boolean=True, ordering="point__active", description="Active")
+    def is_active(self, obj: Measurement) -> bool | None:
+        return obj.point.active
 
     fieldsets = (
         (
@@ -435,26 +474,6 @@ class ReadOnlyViewAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request: HttpRequest, obj=None) -> bool:
         return False
-
-
-@admin.register(PointsMeasurement)
-class PointsMeasurementAdmin(ChangeListMapMixin, ReadOnlyViewAdmin):
-    list_display = (
-        "id",
-        "label",
-        "survey_year",
-        "survey_date",
-        "east",
-        "north",
-        "h",
-        "h_orto",
-        "is_active",
-        "is_fixed",
-        "meas_strategy",
-    )
-    search_fields = ("label",)
-    list_filter = ("survey_year", "is_fixed", "meas_strategy")
-    ordering = ("-survey_year", "label")
 
 
 class PointsMovementAdmin(ReadOnlyViewAdmin):
