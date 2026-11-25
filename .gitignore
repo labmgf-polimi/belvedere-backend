@@ -168,3 +168,6 @@ GitHub.sublime-settings
 .history
 # Local dev settings (scripts/localdb.sh)
 .env.local
+
+# Generated monographs (manage.py generate_monographs)
+/monographs/

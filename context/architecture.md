@@ -213,6 +213,22 @@ survey area, `ST_Transform(geom_enu, 32632)` is off by:
   as "RTK SPIN3" stay), the history ("RTK dal 2023, STATICO in precedenza")
   goes to the point's notes as "Survey mode history: ...". "E' un punto FISSO"
   is only checked against `is_fixed`. Dry-run by default; idempotent.
+  **Monographs**: `manage.py generate_monographs [--until-year Y]
+  [--points ...] [--include-inactive] [--split] [--output DIR]` writes one PDF
+  (cover + index, one A4 page per point) from the database only
+  (`surveys/monographs.py`, template `surveys/monograph.html`, WeasyPrint).
+  Per point: latest measurement up to the year (`latest_measurement`), its
+  survey mode, the point texts, coordinates in EPSG:7791 (E, N, H ITALGEO05),
+  EPSG:4326 (DMS/decimal, h) and geocentric EPSG:6704 (pyproj; matches the
+  2024 monographs to 0.4 mm), up to 2 photos (empty boxes otherwise). Overview
+  map: Esri World Imagery tiles (`surveys/utils/basemap.py`), fetched once and
+  cached in `MONOGRAPH_TILE_CACHE` (default `.cache/monograph_tiles`). All 52
+  active points: ~30 s. **Admin**: Point edit form "View monograph" (HTML, stable
+  photo URLs, the overview embedded once) / "Export monograph PDF"; a
+  "Monograph: View · PDF" column in the Points list; list buttons export **all
+  listed points** (current filters/search) as one HTML page or one PDF
+  (`PointAdmin.get_urls`). PDFs need the Pango/HarfBuzz/DejaVu packages in the
+  Docker image; `weasyprint` is imported only when a PDF is made.
   Stable URL `/surveys/photos/<id>/` (staff only) redirects to a 15-minute
   presigned link; the admin (inline on the Measurement form, standalone
   photo page) only ever links to it. Local development uses

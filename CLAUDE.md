@@ -26,6 +26,7 @@ scripts/localdb.sh test surveys.tests.TestClass.test_method  # single test
 scripts/localdb.sh pull-live                     # overwrite the LOCAL copy with live data (live only read)
 uv run python manage.py import_point_photos data/point_photos --year 2026 [--alias A=B] [--apply]  # field photos + measurement times
 uv run python manage.py import_monograph_texts data/Monografie_*.pub [--apply]  # point texts from Publisher (needs LibreOffice)
+uv run python manage.py generate_monographs [--until-year 2025] [--points D12 ...] [--split]  # point monographs (PDF)
 scripts/localdb.sh run | manage <cmd>            # work against the local copy (.env.local)
 uv run ruff check . && uv run ruff format .      # lint + format
 uv run python manage.py index_s3_images [--camera-id ID] [--dry-run] [--force] [--workers N]

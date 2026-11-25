@@ -1,0 +1,10 @@
+{% extends "admin/surveys/change_form_help.html" %}
+{% comment %}Point edit form: this point's monograph.{% endcomment %}
+
+{% block object-tools-items %}
+  {% if original %}
+  <li><a href="{% url 'admin:surveys_point_monograph' original.pk %}" target="_blank">View monograph</a></li>
+  <li><a href="{% url 'admin:surveys_point_monograph_pdf' original.pk %}">Export monograph PDF</a></li>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

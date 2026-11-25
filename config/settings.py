@@ -45,6 +45,10 @@ S3_REGION_NAME = config("S3_REGION_NAME", default="nbg1")
 # development sets a separate prefix (e.g. dev/measurement_photos/) so test
 # uploads never mix with real photos.
 S3_SURVEYS_BUCKET_NAME = config("S3_SURVEYS_BUCKET_NAME", default="belvedere-surveys")
+# Satellite tiles for the monographs' overview maps, downloaded once.
+MONOGRAPH_TILE_CACHE = Path(
+    config("MONOGRAPH_TILE_CACHE", default=str(BASE_DIR / ".cache" / "monograph_tiles"))
+)
 S3_MEASUREMENT_PHOTOS_PREFIX = config(
     "S3_MEASUREMENT_PHOTOS_PREFIX", default="measurement_photos/"
 )

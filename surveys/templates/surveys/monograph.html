@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+{% comment %}
+Point monographs (surveys.monographs.render): optional cover with an index,
+then one A4 page per point. Rendered to PDF by WeasyPrint.
+{% endcomment %}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Belvedere Glacier – point monographs</title>
+<style>
+  @page {
+    size: A4;
+    margin: 11mm 12mm 14mm;
+    @bottom-left { content: "Belvedere Glacier monitoring network · Politecnico di Milano · LabMGF"; font-family: "DejaVu Sans", sans-serif; font-size: 7pt; color: #777; }
+    @bottom-right { content: "Page " counter(page) " / " counter(pages); font-family: "DejaVu Sans", sans-serif; font-size: 7pt; color: #777; }
+  }
+  * { box-sizing: border-box; }
+  body { font-family: "DejaVu Sans", sans-serif; font-size: 8.5pt; color: #222; margin: 0; }
+  .page { page-break-before: always; }
+  .page:first-of-type { page-break-before: auto; }
+
+  header { display: flex; align-items: center; justify-content: space-between;
+           border-bottom: 1.5pt solid #1f3b5c; padding-bottom: 2mm; margin-bottom: 3mm; }
+  header img.polimi { height: 13mm; }
+  header img.labmgf { height: 15mm; }
+  header .title { text-align: center; color: #1f3b5c; font-size: 9pt; line-height: 1.35; }
+  header .title strong { font-size: 10.5pt; }
+
+  .name { display: flex; align-items: baseline; gap: 4mm; margin: 0 0 3mm; }
+  .name h1 { font-size: 22pt; margin: 0; color: #1f3b5c; }
+  .badge { font-size: 8pt; padding: 0.6mm 2mm; border-radius: 2mm; border: 0.6pt solid #1f3b5c; color: #1f3b5c; }
+  .badge.off { border-color: #b33; color: #b33; }
+
+  table.row { width: 100%; border-collapse: collapse; }
+  table.row > tbody > tr > td { vertical-align: top; padding: 0; }
+  /* The overview image is embedded once, here, and shared by every page. */
+  .map { position: relative; width: 100%; border: 0.6pt solid #999;
+         background-image: url("{{ overview }}"); background-size: 100% 100%; }
+  .map svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+  .attribution { font-size: 5.5pt; color: #777; margin-top: 0.6mm; }
+
+  table.row > tbody > tr > td.info { padding-left: 5mm; }
+  .info dl { margin: 0; }
+  .info dt { font-weight: bold; color: #1f3b5c; margin-top: 2mm; font-size: 7.5pt; text-transform: uppercase; letter-spacing: 0.2pt; }
+  .info dt:first-child { margin-top: 0; }
+  .info dd { margin: 0.5mm 0 0; }
+  .info .notes dt { margin-top: 2mm; }
+  .info .notes dd { color: #b02020; }
+
+  .coords { display: flex; gap: 3mm; margin-top: 4mm; }
+  .block { flex: 1; border: 0.6pt solid #1f3b5c; border-radius: 1.5mm; padding: 2mm 2.5mm; }
+  .block h3 { margin: 0 0 1.5mm; font-size: 8pt; color: #1f3b5c; }
+  .block h3 span { display: block; font-weight: normal; color: #555; }
+  .block table { width: 100%; border-collapse: collapse; }
+  .block td { padding: 0.5mm 0; vertical-align: top; }
+  .block td.k { color: #555; white-space: nowrap; padding-right: 2mm; }
+  .block td.v { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .block td.s { text-align: right; color: #777; font-size: 7pt; white-space: nowrap; padding-left: 1.5mm; }
+  .footnote { font-size: 6.5pt; color: #666; margin-top: 1.5mm; line-height: 1.35; }
+
+  .photos { display: flex; gap: 3mm; margin-top: 4mm; }
+  .photo { flex: 1; height: 95mm; border: 0.6pt solid #bbb; display: flex; align-items: center;
+           justify-content: center; background: #f6f6f6; color: #aaa; font-size: 8pt; }
+  /* Scaled until the longer side fits the box, proportions kept. */
+  .photo img { width: 100%; height: 100%; object-fit: contain; }
+
+  .cover header { margin-bottom: 18mm; }
+  .cover h1 { font-size: 24pt; color: #1f3b5c; margin: 0 0 3mm; }
+  .cover .sub { font-size: 11pt; color: #444; margin-bottom: 10mm; }
+  .cover table.index { width: 100%; border-collapse: collapse; font-size: 8.5pt; }
+  .cover table.index th { text-align: left; border-bottom: 0.8pt solid #1f3b5c; padding: 1mm 1.5mm; color: #1f3b5c; }
+  .cover table.index td { padding: 0.8mm 1.5mm; border-bottom: 0.3pt solid #ddd; }
+  .cover table.index a { color: inherit; text-decoration: none; }
+  .cover table.index a.p::after { content: target-counter(attr(href), page); }
+  /* In a browser: pages as sheets, plus a download link. */
+  .toolbar { display: none; }
+  @media screen {
+    body { background: #e5e5e5; }
+    .page { width: 210mm; min-height: 297mm; margin: 6mm auto; padding: 11mm 12mm;
+            background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
+    .toolbar { display: block; width: 210mm; margin: 6mm auto 0; text-align: right; }
+    .toolbar a { background: #1f3b5c; color: #fff; padding: 2mm 4mm; border-radius: 1.5mm;
+                 text-decoration: none; font-size: 9pt; }
+  }
+</style>
+</head>
+<body>
+{% if pdf_url %}<div class="toolbar"><a href="{{ pdf_url }}">Download PDF</a></div>{% endif %}
+
+{% if cover %}
+<section class="page cover">
+  <header>
+    <img class="polimi" src="{{ logo_polimi }}" alt="Politecnico di Milano">
+    <div class="title"><strong>Belvedere Glacier monitoring network</strong><br>Macugnaga (VCO), Italy</div>
+    <img class="labmgf" src="{{ logo_labmgf }}" alt="LabMGF">
+  </header>
+  <h1>Point monographs</h1>
+  <div class="sub">
+    {{ pages|length }} point{{ pages|length|pluralize }} · coordinates of the latest survey
+    {% if until_year %}up to {{ until_year }}{% endif %} · generated {{ generated|date:"Y-m-d" }}
+  </div>
+  <table class="index">
+    <thead><tr><th>Point</th><th>Type</th><th>Measured</th><th>Survey mode</th><th>Page</th></tr></thead>
+    <tbody>
+    {% for page in pages %}
+      <tr>
+        <td><a href="#{{ page.m.anchor }}">{{ page.m.point.label }}</a></td>
+        <td>{% if page.m.point.is_fixed %}Fixed point{% else %}Moving point{% endif %}</td>
+        <td>{{ page.m.measured_at }}</td>
+        <td>{{ page.m.measurement.meas_strategy|default:"—" }}</td>
+        <td><a class="p" href="#{{ page.m.anchor }}"></a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% for page in pages %}{% with m=page.m point=page.m.point meas=page.m.measurement %}
+<section class="page" id="{{ m.anchor }}">
+  <header>
+    <img class="polimi" src="{{ logo_polimi }}" alt="Politecnico di Milano">
+    <div class="title"><strong>Belvedere Glacier monitoring network</strong><br>Point monograph</div>
+    <img class="labmgf" src="{{ logo_labmgf }}" alt="LabMGF">
+  </header>
+
+  <div class="name">
+    <h1>{{ point.label }}</h1>
+    <span class="badge">{% if point.is_fixed %}Fixed point{% else %}Moving point{% endif %}</span>
+    {% if not point.active %}<span class="badge off">Inactive</span>{% endif %}
+  </div>
+
+  <table class="row"><tbody><tr>
+    <td style="width: 60%">
+      <div class="map" style="padding-top: {{ map_height }}%">
+        <svg viewBox="0 0 100 {{ map_height }}" preserveAspectRatio="none">
+          {% for points in network %}
+            <polygon points="{{ points }}" fill="#f2c200" stroke="#000" stroke-width="0.15"/>
+          {% endfor %}
+          <circle cx="{{ page.marker.x }}" cy="{{ page.marker.y }}" r="2.2" fill="none" stroke="#fff" stroke-width="0.9"/>
+          <circle cx="{{ page.marker.x }}" cy="{{ page.marker.y }}" r="2.2" fill="none" stroke="#e0201b" stroke-width="0.5"/>
+          <text x="{{ page.marker.lx }}" y="{{ page.marker.ly }}" font-size="3.2" font-weight="bold"
+                fill="#fff" stroke="#fff" stroke-width="0.9">{{ point.label }}</text>
+          <text x="{{ page.marker.lx }}" y="{{ page.marker.ly }}" font-size="3.2" font-weight="bold" fill="#c0151b">{{ point.label }}</text>
+          {# North arrow (Web Mercator: north is up) and scale bar #}
+          <g transform="translate(94 4)">
+            <polygon points="0,-2.5 1.5,2 0,1 -1.5,2" fill="#fff" stroke="#000" stroke-width="0.2"/>
+            <text x="0" y="5.4" font-size="2.6" font-weight="bold" text-anchor="middle" fill="#fff" stroke="#fff" stroke-width="0.8">N</text>
+            <text x="0" y="5.4" font-size="2.6" font-weight="bold" text-anchor="middle" fill="#000">N</text>
+          </g>
+          <g transform="translate(3 {{ scale_y }})">
+            <rect x="0" y="0" width="{{ scale_pct }}" height="1" fill="#fff" stroke="#000" stroke-width="0.2"/>
+            <text x="0" y="-1" font-size="2.6" font-weight="bold" fill="#fff" stroke="#fff" stroke-width="0.8">{{ scale_m }} m</text>
+            <text x="0" y="-1" font-size="2.6" font-weight="bold" fill="#000">{{ scale_m }} m</text>
+          </g>
+        </svg>
+      </div>
+      <div class="attribution">{{ attribution }}</div>
+    </td>
+    <td class="info">
+      <dl>
+        <dt>Survey date</dt><dd>{{ m.measured_at }}</dd>
+        <dt>Survey mode</dt><dd>{{ meas.meas_strategy|default:"—" }}</dd>
+        <dt>Target</dt><dd>{{ point.target|default:"—" }}</dd>
+        <dt>Description</dt><dd>{{ point.description|default:"—" }}</dd>
+        {% if point.notes %}<div class="notes"><dt>Notes</dt><dd>{{ point.notes }}</dd></div>{% endif %}
+      </dl>
+    </td>
+  </tr></tbody></table>
+
+  <div class="coords">
+    {% for block in page.blocks %}
+    <div class="block">
+      <h3>{{ block.title }} <span>{{ block.code }}</span></h3>
+      <table>
+        {% for key, value, extra in block.rows %}
+        <tr><td class="k">{{ key }}</td><td class="v">{{ value }}</td>{% if extra %}<td class="s">{{ extra }}</td>{% endif %}</tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="footnote">
+    Campaign {{ meas.survey.year }}. Orthometric heights refer to the ITALGEO05 vertical reference.
+    RDN2008 is ETRF2000 at epoch 2008.0; the WGS 84 values are numerically identical (null transformation) and differ from today's
+    WGS 84 / ITRF realization by about 0.45 m. ± is one standard deviation, where measured.
+  </div>
+
+  <div class="photos">
+    {% for src in page.photos %}
+      <div class="photo">{% if src %}<img src="{{ src }}" alt="Photo of {{ point.label }}">{% else %}No photo{% endif %}</div>
+    {% endfor %}
+  </div>
+</section>
+{% endwith %}{% endfor %}
+</body>
+</html>

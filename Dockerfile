@@ -14,6 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     gdal-bin \
     libgdal-dev \
+    # WeasyPrint (monograph PDFs): text layout and the DejaVu font they use
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libharfbuzz-subset0 \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 ADD https://astral.sh/uv/0.11.19/install.sh /uv-installer.sh

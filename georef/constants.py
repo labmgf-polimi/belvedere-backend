@@ -31,6 +31,9 @@ GEOGRAPHIC_2D_SRID = 6706
 # wrong. See context/architecture.md.
 PROJECT_SRID = 7791
 
+#: RDN2008 geocentric (ECEF) Cartesian X, Y, Z, same realization as PROJECT_SRID.
+GEOCENTRIC_SRID = 6704
+
 # Name of the canonical frame inserted by `georef.migrations.0003`.
 BELVEDERE_FRAME_NAME = "belvedere-enu"
 

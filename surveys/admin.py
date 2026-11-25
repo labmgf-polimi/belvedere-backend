@@ -1,10 +1,18 @@
+import re
+import tempfile
+from datetime import date
+from pathlib import Path
+
+from django.conf import settings
 from django.contrib import admin, messages
 from django.contrib.gis import admin as gis_admin
 from django.contrib.gis.forms.widgets import OSMWidget
+from django.core.exceptions import PermissionDenied
 from django.db import models, transaction
 from django.db.models import Count, Max, Min, OuterRef, QuerySet, Subquery
-from django.http import HttpRequest, HttpResponse
-from django.urls import reverse
+from django.http import Http404, HttpRequest, HttpResponse
+from django.shortcuts import redirect
+from django.urls import path, reverse
 from django.utils.html import format_html
 from import_export.admin import ImportExportMixin
 
@@ -23,6 +31,7 @@ from .models import (
     SurveyHasInstrument,
     Volume,
 )
+from .monographs import natural_key, prepare, render_html, write_pdf
 from .resources import MeasurementResource
 from .sql import COLUMN_COMMENTS as DOC
 from .sql import POINT_MOVEMENTS_COLUMNS, POINT_MOVEMENTS_COMMENTS
@@ -328,7 +337,11 @@ class FlightAdmin(admin.ModelAdmin):
 
 @admin.register(Point)
 class PointAdmin(FieldHelpMixin, ChangeListMapMixin, admin.ModelAdmin):
+    # Add the monograph buttons to the list and the edit form.
+    change_list_template = "admin/surveys/point/change_list.html"
+    change_form_template = "admin/surveys/point/change_form.html"
     field_help = {
+        "monograph_links": "Open the point's monograph, or download it as PDF.",
         "first_survey_date": "Date of the first survey that measured this point.",
         "last_survey_date": "Date of the most recent survey that measured this point.",
         "last_east": "Easting at the latest measurement, m, EPSG:7791.",
@@ -361,6 +374,7 @@ class PointAdmin(FieldHelpMixin, ChangeListMapMixin, admin.ModelAdmin):
         "last_h",
         "num_measurements",
         "measurements_link",
+        "monograph_links",
         "notes",
         "created_at",
     )
@@ -411,6 +425,82 @@ class PointAdmin(FieldHelpMixin, ChangeListMapMixin, admin.ModelAdmin):
             f"Deleted {point_count} point(s) and {measurement_count} measurement(s): "
             f"{', '.join(labels)}.",
             messages.WARNING,
+        )
+
+    # --- monographs (see surveys.monographs) ------------------------------
+
+    def get_urls(self) -> list:
+        view = self.admin_site.admin_view
+        return [
+            path("monographs/", view(self.monographs_view), name="surveys_point_monographs"),
+            path("monographs.pdf", view(self.monographs_view), {"pdf": True},
+                 name="surveys_point_monographs_pdf"),
+            path("<path:object_id>/monograph/", view(self.monograph_view),
+                 name="surveys_point_monograph"),
+            path("<path:object_id>/monograph.pdf", view(self.monograph_view), {"pdf": True},
+                 name="surveys_point_monograph_pdf"),
+        ] + super().get_urls()  # fmt: skip
+
+    def monograph_view(
+        self, request: HttpRequest, object_id: str, pdf: bool = False
+    ) -> HttpResponse:
+        point = self.get_object(request, object_id)
+        if point is None:
+            raise Http404("No such point")
+        pdf_url = reverse("admin:surveys_point_monograph_pdf", args=[point.pk])
+        name = "monograph_" + re.sub(r"\W+", "_", point.label)
+        return self._monographs(request, [point], pdf, False, name, pdf_url)
+
+    def monographs_view(self, request: HttpRequest, pdf: bool = False) -> HttpResponse:
+        """All the points the list shows with the same filters and search."""
+        points = sorted(
+            self.get_changelist_instance(request).queryset,
+            key=lambda p: natural_key(p.label),
+        )
+        query = request.GET.urlencode()
+        pdf_url = reverse("admin:surveys_point_monographs_pdf") + (
+            f"?{query}" if query else ""
+        )
+        return self._monographs(request, points, pdf, True, "monographs", pdf_url)
+
+    def _monographs(
+        self,
+        request: HttpRequest,
+        points: list[Point],
+        pdf: bool,
+        cover: bool,
+        name: str,
+        pdf_url: str,
+    ) -> HttpResponse:
+        if not self.has_view_permission(request):
+            raise PermissionDenied
+        with tempfile.TemporaryDirectory() as tmp:
+            mset = prepare(
+                points, None, Path(tmp), settings.MONOGRAPH_TILE_CACHE, photo_files=pdf
+            )
+            if not mset.monographs:
+                self.message_user(
+                    request, "No measured point to show.", messages.WARNING
+                )
+                return redirect("admin:surveys_point_changelist")
+            if not pdf:
+                html = render_html(
+                    mset, None, cover=cover, for_pdf=False, pdf_url=pdf_url
+                )
+                return HttpResponse(html)
+            data, _ = write_pdf(render_html(mset, None, cover=cover))
+        response = HttpResponse(data, content_type="application/pdf")
+        response["Content-Disposition"] = (
+            f'attachment; filename="{name}_{date.today():%Y%m%d}.pdf"'
+        )
+        return response
+
+    @admin.display(description="Monograph")
+    def monograph_links(self, obj: Point) -> str:
+        return format_html(
+            '<a href="{}" target="_blank">View</a> · <a href="{}">PDF</a>',
+            reverse("admin:surveys_point_monograph", args=[obj.pk]),
+            reverse("admin:surveys_point_monograph_pdf", args=[obj.pk]),
         )
 
     def get_queryset(self, request: HttpRequest) -> QuerySet[Point]:

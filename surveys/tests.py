@@ -1198,3 +1198,203 @@ class ImportMonographTextsTests(TestCase):
         self.run_command("--apply", "--overwrite")
         self.d02.refresh_from_db()
         self.assertEqual(self.d02.target, "nuovo testo")
+
+
+class MonographTests(TestCase):
+    """Monograph data, formatting and the PDF command (no network, no S3)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        s2025 = Survey.objects.create(date=datetime.date(2025, 7, 21), year=2025)
+        s2026 = Survey.objects.create(date=datetime.date(2026, 7, 26), year=2026)
+        cls.point = Point.objects.create(
+            label="D01bis", is_fixed=False, active=True, target="giallo e nero"
+        )
+        Point.objects.create(label="D99", is_fixed=True, active=True)  # never measured
+        coords = {"east": 415924.8624, "north": 5089146.055, "h": 2140.4858}
+        cls.m2025 = Measurement.objects.create(point=cls.point, survey=s2025, **coords)
+        cls.m2026 = Measurement.objects.create(
+            point=cls.point,
+            survey=s2026,
+            meas_strategy="RTK RADIO",
+            meas_time=datetime.datetime(2026, 7, 27, 7, 11, 5, tzinfo=datetime.UTC),
+            **coords,
+        )
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import InMemoryStorage
+
+        field = MeasurementPhoto._meta.get_field("image")
+        original, field.storage = field.storage, InMemoryStorage()
+        self.addCleanup(setattr, field, "storage", original)
+        MeasurementPhoto.objects.create(
+            measurement=self.m2026,
+            image=ContentFile(_photo_bytes(orientation=6), name="a.jpg"),
+        )
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def test_geocentric_matches_2024_monograph(self):
+        from surveys.monographs import geocentric
+
+        # D01bis 2024 in Monografie_dopoSS2024.pdf: same E, N, h as the database.
+        x, y, z = geocentric(415924.8624, 5089146.055, 2140.4858)
+        expected_xyz = (4401410.1987, 611934.0827, 4562980.5427)
+        for got, expected in zip((x, y, z), expected_xyz, strict=True):
+            self.assertAlmostEqual(got, expected, delta=0.001)
+
+    def test_dms(self):
+        from surveys.monographs import dms
+
+        self.assertEqual(
+            dms(45 + 57 / 60 + 2.6844 / 3600, "N", "S"), "45° 57′ 02.6844″ N"
+        )
+        # 59.99999″ rounds up into the minutes, never "60″".
+        self.assertEqual(
+            dms(7 + 54 / 60 + 59.99999 / 3600, "E", "W"), "7° 55′ 00.0000″ E"
+        )
+
+    def test_wgs84_block_has_dms_and_decimal(self):
+        from surveys.monographs import coordinate_blocks
+
+        # lat/lon are filled by the database trigger: read the stored row.
+        rows = coordinate_blocks(Measurement.objects.get(pk=self.m2026.pk))[1]["rows"]
+        values = [value for _, value, _ in rows]
+        self.assertRegex(values[0], r"^45° 57′ \d\d\.\d{4}″ N$")
+        self.assertRegex(values[1], r"^45\.\d{9}°$")
+        self.assertRegex(values[2], r"^7° 54′ \d\d\.\d{4}″ E$")
+        self.assertRegex(values[3], r"^7\.\d{9}°$")
+
+    def test_collect_uses_data_up_to_the_year(self):
+        from surveys.monographs import collect
+
+        latest = collect(self.point, None, self.dir)
+        self.assertEqual(latest.measurement, self.m2026)
+        self.assertEqual(latest.measured_at, "2026-07-27 09:11 CEST")
+        self.assertEqual(len(latest.photos), 1)
+        # Stored with EXIF tag 6 (40x20): embedded upright.
+        self.assertEqual(PILImage.open(latest.files[0]).size, (20, 40))
+
+        as_of_2025 = collect(self.point, 2025, self.dir)
+        self.assertEqual(as_of_2025.measurement, self.m2025)
+        self.assertEqual(as_of_2025.photos, [])  # the 2026 photo is not used
+        self.assertIsNone(collect(Point.objects.get(label="D99"), None, self.dir))
+
+    def test_basemap_position_and_scale(self):
+        from surveys.utils.basemap import Basemap, to_mercator
+
+        xmin, ymax = to_mercator(7.90, 45.98)
+        xmax, ymin = to_mercator(7.94, 45.94)
+        basemap = Basemap(self.dir / "m.jpg", (xmin, ymin, xmax, ymax), 1000, 750, 3.0)
+        self.assertEqual(basemap.position(7.90, 45.98), (0.0, 0.0))
+        x, y = basemap.position(7.94, 45.94)
+        self.assertAlmostEqual(x, 100.0)
+        self.assertAlmostEqual(y, 100.0)
+        length, percent = basemap.scale_bar()  # 20 % of 3000 m -> 500 m
+        self.assertEqual((length, round(percent, 3)), (500, 16.667))
+
+    def test_command_writes_pdfs(self):
+        from io import StringIO
+        from unittest.mock import patch
+
+        from django.core.management import call_command
+
+        from surveys.utils.basemap import Basemap
+
+        def fake_basemap(lonlats, out, cache_dir):
+            PILImage.new("RGB", (400, 300), "grey").save(out)
+            return Basemap(
+                out, (877000.0, 5772000.0, 884000.0, 5777250.0), 400, 300, 17.5
+            )
+
+        out = StringIO()
+        with patch(
+            "surveys.monographs.build_basemap",
+            fake_basemap,
+        ):
+            call_command(
+                "generate_monographs", "--output", str(self.dir), "--split", stdout=out
+            )
+        output = out.getvalue()
+        self.assertIn("skipped: D99", output)
+        pdfs = sorted(self.dir.glob("monographs_latest_*.pdf"))
+        self.assertEqual(len(pdfs), 1)
+        self.assertTrue(pdfs[0].read_bytes().startswith(b"%PDF"))
+        self.assertIn("(2 pages)", output)  # cover + one point
+        self.assertTrue((self.dir / "points" / "D01bis.pdf").exists())
+
+
+# The manifest storage of production only knows files after collectstatic.
+@override_settings(
+    STORAGES={
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
+        },
+    }
+)
+class MonographAdminTests(MonographTests):
+    """The monograph buttons in the Points admin (same fixtures, fake imagery)."""
+
+    def setUp(self):
+        from unittest.mock import patch
+
+        from django.contrib.auth.models import User
+
+        from surveys.utils.basemap import Basemap
+
+        super().setUp()
+
+        def fake_basemap(lonlats, out, cache_dir):
+            PILImage.new("RGB", (400, 300), "grey").save(out)
+            return Basemap(
+                out, (877000.0, 5772000.0, 884000.0, 5777250.0), 400, 300, 17.5
+            )
+
+        patcher = patch("surveys.monographs.build_basemap", fake_basemap)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.client.force_login(
+            User.objects.create_superuser("admin", "a@example.com", "pw")
+        )
+
+    def url(self, name: str, *args) -> str:
+        return reverse(f"admin:surveys_point_{name}", args=args)
+
+    def test_buttons_on_list_and_form(self):
+        response = self.client.get(self.url("changelist"))
+        self.assertContains(response, self.url("monographs"))
+        self.assertContains(response, self.url("monograph_pdf", self.point.pk))
+        response = self.client.get(self.url("change", self.point.pk))
+        self.assertContains(response, "View monograph")
+        self.assertContains(response, self.url("monograph_pdf", self.point.pk))
+
+    def test_view_one_point_in_the_browser(self):
+        response = self.client.get(self.url("monograph", self.point.pk))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "D01bis")
+        # Browser version: stable photo URL, static logo, link to the PDF.
+        self.assertContains(response, MeasurementPhoto.objects.get().get_absolute_url())
+        self.assertContains(response, "/static/surveys/monograph/polimi.jpg")
+        self.assertContains(response, "Download PDF")
+
+    def test_export_pdfs(self):
+        response = self.client.get(self.url("monograph_pdf", self.point.pk))
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertTrue(response.content.startswith(b"%PDF"))
+        self.assertIn("monograph_D01bis_", response["Content-Disposition"])
+
+        # The list's filters apply to "all points".
+        response = self.client.get(self.url("monographs_pdf"), {"active__exact": "1"})
+        self.assertTrue(response.content.startswith(b"%PDF"))
+        self.assertIn("monographs_", response["Content-Disposition"])
+
+    def test_requires_staff(self):
+        self.client.logout()
+        response = self.client.get(self.url("monograph", self.point.pk))
+        self.assertEqual(response.status_code, 302)
