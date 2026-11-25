@@ -5,6 +5,7 @@
   {% with query=request.GET.urlencode %}
   <li><a href="{% url 'admin:surveys_point_monographs' %}{% if query %}?{{ query }}{% endif %}" target="_blank">View monographs ({{ cl.result_count }})</a></li>
   <li><a href="{% url 'admin:surveys_point_monographs_pdf' %}{% if query %}?{{ query }}{% endif %}">Export monographs PDF ({{ cl.result_count }})</a></li>
+  <li><a href="{% url 'admin:surveys_point_export_latest' %}{% if query %}?{{ query }}{% endif %}" title="Listed points with all the information of their latest measurement">Export CSV ({{ cl.result_count }})</a></li>
   {% endwith %}
   {{ block.super }}
 {% endblock %}

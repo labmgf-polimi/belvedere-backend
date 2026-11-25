@@ -19,6 +19,7 @@ from import_export.admin import ImportExportMixin
 
 from georef.enu import format_enu_point
 
+from .exports import latest_measurements_csv
 from .models import (
     Flight,
     Instrument,
@@ -496,11 +497,31 @@ class PointAdmin(FieldHelpMixin, ChangeListMapMixin, admin.ModelAdmin):
             path("monographs/", view(self.monographs_view), name="surveys_point_monographs"),
             path("monographs.pdf", view(self.monographs_view), {"pdf": True},
                  name="surveys_point_monographs_pdf"),
+            path("export-latest.csv", view(self.export_latest_view),
+                 name="surveys_point_export_latest"),
             path("<path:object_id>/monograph/", view(self.monograph_view),
                  name="surveys_point_monograph"),
             path("<path:object_id>/monograph.pdf", view(self.monograph_view), {"pdf": True},
                  name="surveys_point_monograph_pdf"),
         ] + super().get_urls()  # fmt: skip
+
+    def export_latest_view(self, request: HttpRequest) -> HttpResponse:
+        """CSV of the listed points (same filters) with their latest measurement."""
+        if not self.has_view_permission(request):
+            raise PermissionDenied
+        points = sorted(
+            self.get_changelist_instance(request).queryset,
+            key=lambda p: natural_key(p.label),
+        )
+        # BOM: Excel then reads the file as UTF-8 (accented Italian texts).
+        response = HttpResponse(
+            "\ufeff" + latest_measurements_csv(points),
+            content_type="text/csv; charset=utf-8",
+        )
+        response["Content-Disposition"] = (
+            f'attachment; filename="points_latest_measurement_{date.today():%Y%m%d}.csv"'
+        )
+        return response
 
     def monograph_view(
         self, request: HttpRequest, object_id: str, pdf: bool = False

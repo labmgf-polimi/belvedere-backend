@@ -1413,6 +1413,35 @@ class MonographAdminTests(MonographTests):
         self.assertTrue(response.content.startswith(b"%PDF"))
         self.assertIn("monographs_", response["Content-Disposition"])
 
+    def test_export_latest_measurements_csv(self):
+        import csv as csvlib
+        import io
+
+        Point.objects.create(label="OLD1", active=False, is_fixed=False)
+        response = self.client.get(self.url("export_latest"))
+        self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
+        self.assertIn("points_latest_measurement_", response["Content-Disposition"])
+        text = response.content.decode("utf-8-sig")
+        rows = {r["label"]: r for r in csvlib.DictReader(io.StringIO(text))}
+        # Active points only, as the list shows by default.
+        self.assertEqual(set(rows), {"D01bis", "D99"})
+        d01 = rows["D01bis"]
+        self.assertEqual(d01["survey_year"], "2026")  # the latest measurement
+        self.assertEqual(d01["meas_time_local"], "2026-07-27 09:11:05 CEST")
+        self.assertEqual(d01["survey_mode"], "RTK RADIO")
+        self.assertEqual(d01["east_7791"], "415924.8624")
+        self.assertAlmostEqual(float(d01["x_6704"]), 4401410.1983, delta=0.001)
+        self.assertEqual(d01["target"], "giallo e nero")
+        self.assertEqual(d01["photos"], "1")
+        self.assertEqual(rows["D99"]["survey_year"], "")  # never measured
+        # Filters apply: all points.
+        text = self.client.get(self.url("export_latest"), {"status": "all"}).content
+        self.assertIn(b"OLD1", text)
+        # The button is on the list.
+        self.assertContains(
+            self.client.get(self.url("changelist")), self.url("export_latest")
+        )
+
     def test_requires_staff(self):
         self.client.logout()
         response = self.client.get(self.url("monograph", self.point.pk))
