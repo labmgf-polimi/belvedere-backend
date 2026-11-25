@@ -249,11 +249,13 @@ class PointMovementViewTests(TestCase):
         response = self.client.get(reverse("admin:surveys_pointmovement_changelist"))
         self.assertEqual(response.status_code, 200)
         features = response.context["map_geojson"]["features"]
-        # No year selected: annual pairs of the latest year only (2023: S01, S02).
-        self.assertEqual(
-            sorted(f["properties"]["label"] for f in features), ["S01", "S02"]
-        )
-        self.assertIn("2023", response.context["map_noun"])
+        # All years by default, annual pairs only (S01 3, S02 3, S03 1): the
+        # 92-day remeasure is not drawn.
+        self.assertEqual(len(features), 3 + 3 + 1)
+        # Headers say which end of the movement the dates and year refer to.
+        for header in ("Year (end)", "Start date", "End date"):
+            self.assertContains(response, header)
+        self.assertIn("end", response.context["field_help"]["survey_year"])
         self.assertEqual(features[0]["geometry"]["type"], "LineString")
         classes = response.context["map_classes"]
         self.assertEqual(classes["property"], "v")
@@ -269,7 +271,7 @@ class PointMovementViewTests(TestCase):
         )
         self.assertEqual(bucket["label"], "10–20")
 
-        # A selected year is shown instead (2021: S01, S02, S03).
+        # Filters narrow the map (2021: S01, S02, S03).
         response = self.client.get(
             reverse("admin:surveys_pointmovement_changelist"), {"survey_year": "2021"}
         )

@@ -62,8 +62,8 @@ COLUMN_COMMENTS: dict[str, str] = {
     # --- point_movements view ---
     "point_id": "Id of the monitoring point.",
     "geom_line": "Displacement line from the earlier to the later position, EPSG:7791.",
-    "date_prev": "Date of the earlier measurement (measurement date, else campaign date).",
-    "date_fin": "Date of the later measurement (measurement date, else campaign date).",
+    "date_prev": "Start of the movement: date of the earlier measurement (measurement date, else campaign date).",
+    "date_fin": "End of the movement: date of the later measurement (measurement date, else campaign date).",
     "dt": "Days between the two measurements.",
     "is_annual": "True when the two measurements are about a year apart (280 < dt < 400 days).",
     "d_e": "Displacement east, m (true east, local ENU frame).",
@@ -94,20 +94,26 @@ TABLE_COMMENTS: dict[str, str] = {
 
 
 def comment_columns(
-    relation: str, columns: tuple[str, ...], *, drop: bool = False
+    relation: str,
+    columns: tuple[str, ...],
+    *,
+    drop: bool = False,
+    overrides: dict[str, str] | None = None,
 ) -> str:
     """`COMMENT ON COLUMN` for the columns of a table or view.
 
     Views do not inherit column comments from their base tables, and dropping
     a view drops its comments — so this is appended to the view DDL and
-    reapplied on every rebuild.
+    reapplied on every rebuild. `overrides` replaces the shared wording where a
+    column means something narrower on this relation.
     """
+    texts = COLUMN_COMMENTS | (overrides or {})
     statements = [
         "COMMENT ON COLUMN public.{}.{} IS {};".format(
-            relation, column, "NULL" if drop else _quote(COLUMN_COMMENTS[column])
+            relation, column, "NULL" if drop else _quote(texts[column])
         )
         for column in columns
-        if column in COLUMN_COMMENTS
+        if column in texts
     ]
     return "\n".join(statements) + "\n"
 
@@ -300,6 +306,11 @@ POINTS_MEASUREMENTS_COLUMNS = (
 )  # fmt: skip
 
 
+#: Where a shared column name means something narrower on point_movements.
+POINT_MOVEMENTS_COMMENTS = {
+    "survey_year": "Campaign year of the later (end) measurement: the movement covers date_prev -> date_fin.",
+}
+
 POINT_MOVEMENTS_COLUMNS = (
     "point_id", "label", "survey_year", "date_prev", "date_fin", "dt",
     "is_annual", "geom_line", "d_e", "d_n", "d", "d_h", "d_3d", "v_e", "v_n",
@@ -326,7 +337,11 @@ def create_views() -> str:
         points_measurements_sql()
         + comment_columns("points_measurements", POINTS_MEASUREMENTS_COLUMNS)
         + POINT_MOVEMENTS_SQL
-        + comment_columns("point_movements", POINT_MOVEMENTS_COLUMNS)
+        + comment_columns(
+            "point_movements",
+            POINT_MOVEMENTS_COLUMNS,
+            overrides=POINT_MOVEMENTS_COMMENTS,
+        )
         + ACTIVE_POINTS_SQL
         + comment_columns("active_points", ACTIVE_POINTS_COLUMNS)
     )

@@ -15,7 +15,7 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
   #changelist-map > summary { cursor: pointer; font-weight: bold; padding: 4px 0; }
   #changelist-map-canvas { height: 500px; margin-top: 6px; border: 1px solid var(--hairline-color); }
   #changelist-map-canvas .legend { background: #fff; color: #333; padding: 6px 8px; border-radius: 4px; line-height: 1.5; }
-  #changelist-map-canvas .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+  #changelist-map-canvas .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); }
 </style>
 {% endblock %}
 
@@ -68,44 +68,31 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
         colourOf = k => palette[keys.indexOf(k) % palette.length];
       }
 
-      // White rings and casings keep the marks readable on satellite imagery.
+      // Rings and casings keep the marks readable on satellite imagery: dark
+      // for the velocity scale (its bright yellow end), white for the rest.
+      const ring = classes ? "#1b1b1b" : "#fff";
       const dot = (latlng, colour, radius) => L.circleMarker(latlng, {
-        radius, weight: 2, color: "#fff", fillColor: colour, fillOpacity: 1,
+        radius, weight: classes ? 1.5 : 2, color: ring, fillColor: colour, fillOpacity: 1,
       });
       function popup(f) {
         const p = f.properties;
         const a = document.createElement("a");
         a.href = p.url;
         a.textContent = p.label;
-        const parts = [p.date ?? p.year];
+        // Movements span two dates; `year` is the year of the end one.
+        const when = p.date_prev ? `${p.date_prev} → ${p.date} (year ${p.year}, end)` : (p.date ?? p.year);
+        const parts = [];
         if (p.v != null) parts.push(`v ${p.v.toFixed(2)} m/yr`, `d ${p.d.toFixed(2)} m`);
         else if (p.h != null) parts.push(`h ${p.h.toFixed(2)} m`);
         const box = document.createElement("div");
-        box.append(a, document.createElement("br"), parts.join(" · "));
+        box.append(a, document.createElement("br"), when);
+        if (parts.length) box.append(document.createElement("br"), parts.join(" · "));
         return box;
       }
       const tooltip = f => f.properties.v != null
-        ? `${f.properties.label} · ${f.properties.v.toFixed(1)} m/yr` : f.properties.label;
+        ? `${f.properties.label} ${f.properties.year}: ${f.properties.v.toFixed(1)} m/yr`
+        : f.properties.label;
       const isLine = f => f.geometry.type === "LineString";
-
-      // Arrow from the earlier position along the movement, `scale` map metres
-      // per unit of the class property (m/yr). Local flat-earth approximation:
-      // drawing only, sub-pixel over a few hundred metres.
-      function arrow(f, scale) {
-        const [[lon0, lat0], [lon1, lat1]] = f.geometry.coordinates;
-        const kx = 111320 * Math.cos(lat0 * Math.PI / 180), ky = 110540;  // m per degree
-        const dx = (lon1 - lon0) * kx, dy = (lat1 - lat0) * ky;
-        const norm = Math.hypot(dx, dy) || 1;
-        const ux = dx / norm, uy = dy / norm;
-        const length = f.properties[classes.property] * scale;
-        const tip = [lat0 + uy * length / ky, lon0 + ux * length / kx];
-        const barb = angle => {  // head segment: the shaft direction reversed, rotated
-          const c = Math.cos(angle), s = Math.sin(angle), h = 0.3 * length;
-          return [tip[0] - (ux * s + uy * c) * h / ky, tip[1] - (ux * c - uy * s) * h / kx];
-        };
-        return [[[lat0, lon0], tip], [barb(0.45), tip, barb(-0.45)]];
-      }
-      const scale = classes && classes.arrow_scale_m;
 
       const overlays = {};
       for (const key of keys) {
@@ -113,28 +100,17 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
         if (!features.length) continue;
         const colour = colourOf(key);
         const group = L.layerGroup();
-        if (scale) {
-          for (const f of features.filter(isLine)) {
-            const shape = arrow(f, scale);
-            L.polyline(shape, { color: "#fff", weight: 6, opacity: 0.8, interactive: false }).addTo(group);
-            L.polyline(shape, { color: colour, weight: 3, opacity: 1 })
-              .bindPopup(popup(f)).bindTooltip(tooltip(f)).addTo(group);
-            dot(shape[0][0], colour, 3).bindPopup(popup(f)).bindTooltip(tooltip(f)).addTo(group);
-          }
-          overlays[key + unit] = group.addTo(map);
-          continue;
-        }
-        L.geoJSON({ type: "FeatureCollection", features: features.filter(isLine) },
-                  { style: () => ({ color: "#fff", weight: 6, opacity: 0.8 }), interactive: false })
-          .addTo(group);
+        // Movements: a thin bar from start to end position at true scale only
+        // shows the direction; the dot at the end position carries the value.
+        L.geoJSON({ type: "FeatureCollection", features: features.filter(isLine) }, {
+          style: () => ({ color: ring, weight: 4, opacity: 0.6, lineCap: "round" }),
+          interactive: false,
+        }).addTo(group);
         L.geoJSON({ type: "FeatureCollection", features }, {
           pointToLayer: (f, latlng) => dot(latlng, colour, 5),
-          // Lines (movements): earlier -> later position.
-          style: () => ({ color: colour, weight: 3, opacity: 1 }),
+          style: () => ({ color: colour, weight: 2, opacity: 1, lineCap: "round" }),
           onEachFeature: (f, layer) => layer.bindPopup(popup(f)).bindTooltip(tooltip(f)),
         }).addTo(group);
-        // A dot at the later end gives each line its direction, and carries the
-        // colour when the line is too short to see (slow stakes).
         for (const f of features.filter(isLine)) {
           const [lon, lat] = f.geometry.coordinates[1];
           dot([lat, lon], colour, 4).bindPopup(popup(f)).bindTooltip(tooltip(f)).addTo(group);
@@ -157,11 +133,6 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
           swatch.style.background = colourOf(key);
           row.append(swatch, key);
           div.append(row);
-        }
-        if (scale) {
-          const note = document.createElement("div");
-          note.textContent = `Arrow length: 10 ${classes.unit} = ${10 * scale} m`;
-          div.append(note);
         }
         return div;
       };

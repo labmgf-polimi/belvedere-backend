@@ -460,9 +460,9 @@ class PointMovement(models.Model):
     id = models.IntegerField(primary_key=True)  # id of the later measurement
     point_id = models.IntegerField()
     label = models.CharField(max_length=45)
-    survey_year = models.BigIntegerField(null=True)
-    date_prev = models.DateField()
-    date_fin = models.DateField()
+    survey_year = models.BigIntegerField(null=True, verbose_name="year (end)")
+    date_prev = models.DateField(verbose_name="start date")
+    date_fin = models.DateField(verbose_name="end date")
     dt = models.IntegerField(verbose_name="dt (days)")
     is_annual = models.BooleanField()
     geom_line = models.LineStringField(srid=PROJECT_SRID, null=True)

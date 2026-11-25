@@ -25,7 +25,7 @@ from .models import (
 )
 from .resources import MeasurementResource
 from .sql import COLUMN_COMMENTS as DOC
-from .sql import POINT_MOVEMENTS_COLUMNS
+from .sql import POINT_MOVEMENTS_COLUMNS, POINT_MOVEMENTS_COMMENTS
 
 
 def changelist_geojson(
@@ -118,22 +118,22 @@ class ChangeListMapMixin:
 
 #: Horizontal velocity classes, m/yr, for the movement map. Round breaks that
 #: split the annual velocities (0-31 m/yr, median 6 in 2015-2026) into
-#: comparable groups. Colours: one orange hue, light -> dark = slow -> fast (an
-#: ordinal ramp, validated with the dataviz palette checks); orange stands out
-#: on the grey debris cover and green slopes of the satellite imagery, blue did
-#: not. Each movement is drawn as an arrow `arrow_scale_m` map metres long per
-#: m/yr, because true annual displacements are 1-2 pixels at glacier zoom.
+#: comparable groups. Colours: matplotlib's "magma" reversed, sampled at 1.0,
+#: 0.82, 0.64, 0.45, 0.25 — perceptually uniform, near-white (slow) -> dark
+#: purple (fast), stopping short of black so fast dots stay visible on dark
+#: rock; adjacent classes stay apart for colour-blind readers (worst protan
+#: dE 11.0, dataviz palette validator). The map rings dots in dark grey so the
+#: near-white end reads on bright debris.
 VELOCITY_CLASSES = {
     "property": "v",
     "title": "Horizontal velocity",
     "unit": "m/yr",
-    "arrow_scale_m": 20,
     "classes": [
-        {"label": "< 2", "max": 2, "color": "#f39663"},
-        {"label": "2–5", "max": 5, "color": "#e66b35"},
-        {"label": "5–10", "max": 10, "color": "#c9501d"},
-        {"label": "10–20", "max": 20, "color": "#9c3b12"},
-        {"label": "≥ 20", "max": None, "color": "#6a2508"},
+        {"label": "< 2", "max": 2, "color": "#fcfdbf"},
+        {"label": "2–5", "max": 5, "color": "#fea973"},
+        {"label": "5–10", "max": 10, "color": "#ea5661"},
+        {"label": "10–20", "max": 20, "color": "#a1307e"},
+        {"label": "≥ 20", "max": None, "color": "#51127c"},
     ],
 }
 
@@ -683,7 +683,13 @@ class ReadOnlyViewAdmin(admin.ModelAdmin):
 
 @admin.register(PointMovement)
 class PointMovementAdmin(FieldHelpMixin, ChangeListMapMixin, ReadOnlyViewAdmin):
-    """Movements of the moving points; the map draws each one as a line."""
+    """Movements of the moving points.
+
+    The map draws every annual movement as a bar from its start to its end
+    position at true scale, coloured by that year's horizontal velocity: a
+    stake's consecutive years join into its path, showing how its velocity
+    changes along the way.
+    """
 
     map_fields = {
         "lat_prev": "lat_prev",
@@ -692,6 +698,7 @@ class PointMovementAdmin(FieldHelpMixin, ChangeListMapMixin, ReadOnlyViewAdmin):
         "lon": "lon_fin",
         "label": "label",
         "year": "survey_year",
+        "date_prev": "date_prev",
         "date": "date_fin",
         "v": "v",
         "d": "d",
@@ -699,29 +706,20 @@ class PointMovementAdmin(FieldHelpMixin, ChangeListMapMixin, ReadOnlyViewAdmin):
     # Links to the later measurement of the pair (the view's id).
     map_url_name = "admin:surveys_measurement_change"
     map_classes = VELOCITY_CLASSES
+    map_noun = (
+        "annual movements, coloured by horizontal velocity "
+        "(all years unless filtered; intra-annual pairs are not drawn)"
+    )
 
     def map_rows(
         self, request: HttpRequest, queryset: QuerySet
     ) -> tuple[QuerySet, str]:
-        """Annual pairs of one year: the selected survey year, else the latest.
+        # Yearly velocities only come from annual pairs.
+        return queryset.filter(is_annual=True), self.map_noun
 
-        Yearly velocities only come from annual pairs, and arrows of several
-        years on the same stakes would overlap.
-        """
-        rows = queryset.filter(is_annual=True)
-        year = request.GET.get("survey_year")
-        if year is None:
-            year = rows.aggregate(latest=Max("survey_year"))["latest"]
-            if year is None:
-                return rows, "annual velocities"
-            rows = rows.filter(survey_year=year)
-            return (
-                rows,
-                f"annual velocities of {year} (latest year; pick a survey year for another)",
-            )
-        return rows, f"annual velocities of {year}"
-
-    field_help = {column: DOC[column] for column in POINT_MOVEMENTS_COLUMNS}
+    field_help = {
+        column: DOC[column] for column in POINT_MOVEMENTS_COLUMNS
+    } | POINT_MOVEMENTS_COMMENTS
 
     list_display = (
         "label",
@@ -738,5 +736,11 @@ class PointMovementAdmin(FieldHelpMixin, ChangeListMapMixin, ReadOnlyViewAdmin):
         "v_3d",
     )
     search_fields = ("label",)
-    list_filter = ("is_annual", "survey_year")
+    list_filter = (
+        "is_annual",
+        (
+            "survey_year",
+            titled_filter(admin.AllValuesFieldListFilter, "year (end of movement)"),
+        ),
+    )
     ordering = ("label", "-date_fin")
