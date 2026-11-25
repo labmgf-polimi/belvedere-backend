@@ -89,6 +89,15 @@ class ChangeListMapMixin:
     }
     map_url_name: str = "admin:surveys_measurement_change"
     map_max_features: int = 5000
+    #: Wording of the map summary line ("Map — <n> <noun>").
+    map_noun: str = "point(s), following the current filters and search"
+    #: Colour by value classes instead of by year: {"property", "title", "unit",
+    #: "classes": [{"label", "max" (exclusive, None = open), "color"}]}.
+    map_classes: dict | None = None
+
+    def map_queryset(self, queryset: QuerySet) -> QuerySet:
+        """Rows to plot, from the filtered changelist queryset."""
+        return queryset
 
     def changelist_view(
         self, request: HttpRequest, extra_context: dict | None = None
@@ -98,12 +107,32 @@ class ChangeListMapMixin:
         context = getattr(response, "context_data", None)
         if context and "cl" in context:
             context["map_geojson"] = changelist_geojson(
-                context["cl"].queryset,
+                self.map_queryset(context["cl"].queryset),
                 self.map_fields,
                 self.map_url_name,
                 self.map_max_features,
             )
+            context["map_noun"] = self.map_noun
+            context["map_classes"] = self.map_classes
         return response
+
+
+#: Horizontal velocity classes, m/yr, for the movement map. Round breaks that
+#: split the annual velocities (0-31 m/yr, median 6 in 2015-2026) into
+#: comparable groups. Colours: one blue hue, light -> dark = slow -> fast
+#: (an ordinal ramp; validated with the dataviz palette checks).
+VELOCITY_CLASSES = {
+    "property": "v",
+    "title": "Horizontal velocity",
+    "unit": "m/yr",
+    "classes": [
+        {"label": "< 2", "max": 2, "color": "#86b6ef"},
+        {"label": "2–5", "max": 5, "color": "#5598e7"},
+        {"label": "5–10", "max": 10, "color": "#2a78d6"},
+        {"label": "10–20", "max": 20, "color": "#1c5cab"},
+        {"label": "≥ 20", "max": None, "color": "#0d366b"},
+    ],
+}
 
 
 def titled_filter(base: type[admin.FieldListFilter], title: str) -> type:
@@ -666,6 +695,13 @@ class PointMovementAdmin(FieldHelpMixin, ChangeListMapMixin, ReadOnlyViewAdmin):
     }
     # Links to the later measurement of the pair (the view's id).
     map_url_name = "admin:surveys_measurement_change"
+    map_noun = "annual movement(s) coloured by horizontal velocity (filters apply; intra-annual pairs are not drawn)"
+    map_classes = VELOCITY_CLASSES
+
+    def map_queryset(self, queryset: QuerySet) -> QuerySet:
+        # The map shows yearly velocities, which only annual pairs give.
+        return queryset.filter(is_annual=True)
+
     field_help = {column: DOC[column] for column in POINT_MOVEMENTS_COLUMNS}
 
     list_display = (

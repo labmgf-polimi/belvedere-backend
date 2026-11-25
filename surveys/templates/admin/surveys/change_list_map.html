@@ -22,10 +22,11 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
 {% block content %}
 {% if map_geojson %}
   <details id="changelist-map">
-    <summary>Map — {{ map_geojson.features|length }} point(s), following the current filters and search</summary>
+    <summary>Map — {{ map_geojson.features|length }} {{ map_noun }}</summary>
     <div id="changelist-map-canvas"></div>
   </details>
   {{ map_geojson|json_script:"changelist-map-geojson" }}
+  {% if map_classes %}{{ map_classes|json_script:"changelist-map-classes" }}{% endif %}
   <script>
   (function () {
     const details = document.getElementById("changelist-map");
@@ -34,6 +35,8 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
 
     function buildMap() {
       const data = JSON.parse(document.getElementById("changelist-map-geojson").textContent);
+      const classesEl = document.getElementById("changelist-map-classes");
+      const classes = classesEl ? JSON.parse(classesEl.textContent) : null;
       map = L.map("changelist-map-canvas");
       const baseLayers = {
         "Satellite (Esri)": L.tileLayer(
@@ -47,55 +50,82 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
       };
       baseLayers["Satellite (Esri)"].addTo(map);
 
-      const palette = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4",
-                       "#46f0f0", "#f032e6", "#bcf60c", "#fabebe", "#008080", "#e6beff"];
-      const years = [...new Set(data.features.map(f => f.properties.year))].sort();
-      const colour = y => palette[years.indexOf(y) % palette.length];
+      // Each feature gets a group key (a value class, or else its year) and
+      // the group's colour; each group is one toggleable layer.
+      let keys, keyOf, colourOf, unit = "";
+      if (classes) {
+        unit = " " + classes.unit;
+        keys = classes.classes.map(c => c.label);
+        keyOf = f => classes.classes.find(
+          c => c.max === null || f.properties[classes.property] < c.max).label;
+        const colours = Object.fromEntries(classes.classes.map(c => [c.label, c.color]));
+        colourOf = k => colours[k];
+      } else {
+        const palette = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4",
+                         "#46f0f0", "#f032e6", "#bcf60c", "#fabebe", "#008080", "#e6beff"];
+        keys = [...new Set(data.features.map(f => String(f.properties.year)))].sort();
+        keyOf = f => String(f.properties.year);
+        colourOf = k => palette[keys.indexOf(k) % palette.length];
+      }
 
-      const dot = (latlng, year, radius) => L.circleMarker(latlng, {
-        radius, weight: 1, color: "#000", fillColor: colour(year), fillOpacity: 0.9,
+      // White rings and casings keep the marks readable on satellite imagery.
+      const dot = (latlng, colour, radius) => L.circleMarker(latlng, {
+        radius, weight: 2, color: "#fff", fillColor: colour, fillOpacity: 1,
       });
+      function popup(f) {
+        const p = f.properties;
+        const a = document.createElement("a");
+        a.href = p.url;
+        a.textContent = p.label;
+        const parts = [p.date ?? p.year];
+        if (p.v != null) parts.push(`v ${p.v.toFixed(2)} m/yr`, `d ${p.d.toFixed(2)} m`);
+        else if (p.h != null) parts.push(`h ${p.h.toFixed(2)} m`);
+        const box = document.createElement("div");
+        box.append(a, document.createElement("br"), parts.join(" · "));
+        return box;
+      }
+      const tooltip = f => f.properties.v != null
+        ? `${f.properties.label} · ${f.properties.v.toFixed(1)} m/yr` : f.properties.label;
+      const isLine = f => f.geometry.type === "LineString";
+
       const overlays = {};
-      for (const year of years) {
-        const group = L.geoJSON(
-          { type: "FeatureCollection", features: data.features.filter(f => f.properties.year === year) },
-          {
-            pointToLayer: (f, latlng) => dot(latlng, year, 5),
-            // Lines (movements): earlier -> later position.
-            style: () => ({ color: colour(year), weight: 3, opacity: 0.9 }),
-            onEachFeature: (f, layer) => {
-              const p = f.properties;
-              const a = document.createElement("a");
-              a.href = p.url;
-              a.textContent = p.label;
-              const parts = [p.date ?? year];
-              if (p.v != null) parts.push(`v ${p.v.toFixed(2)} m/yr`, `d ${p.d.toFixed(2)} m`);
-              else if (p.h != null) parts.push(`h ${p.h.toFixed(2)} m`);
-              const box = document.createElement("div");
-              box.append(a, document.createElement("br"), parts.join(" · "));
-              layer.bindPopup(box);
-              layer.bindTooltip(p.label);
-            },
-          }
-        );
-        // A dot at the later end shows which way each line points.
-        for (const f of data.features) {
-          if (f.properties.year !== year || f.geometry.type !== "LineString") continue;
+      for (const key of keys) {
+        const features = data.features.filter(f => keyOf(f) === key);
+        if (!features.length) continue;
+        const colour = colourOf(key);
+        const group = L.layerGroup();
+        L.geoJSON({ type: "FeatureCollection", features: features.filter(isLine) },
+                  { style: () => ({ color: "#fff", weight: 6, opacity: 0.8 }), interactive: false })
+          .addTo(group);
+        L.geoJSON({ type: "FeatureCollection", features }, {
+          pointToLayer: (f, latlng) => dot(latlng, colour, 5),
+          // Lines (movements): earlier -> later position.
+          style: () => ({ color: colour, weight: 3, opacity: 1 }),
+          onEachFeature: (f, layer) => layer.bindPopup(popup(f)).bindTooltip(tooltip(f)),
+        }).addTo(group);
+        // A dot at the later end gives each line its direction, and carries the
+        // colour when the line is too short to see (slow stakes).
+        for (const f of features.filter(isLine)) {
           const [lon, lat] = f.geometry.coordinates[1];
-          dot([lat, lon], year, 3).addTo(group);
+          dot([lat, lon], colour, 4).bindPopup(popup(f)).bindTooltip(tooltip(f)).addTo(group);
         }
-        overlays[String(year)] = group.addTo(map);
+        overlays[key + unit] = group.addTo(map);
       }
       L.control.layers(baseLayers, overlays).addTo(map);
 
       const legend = L.control({ position: "bottomright" });
       legend.onAdd = () => {
         const div = L.DomUtil.create("div", "legend");
-        for (const y of years) {
+        if (classes) {
+          const title = document.createElement("strong");
+          title.textContent = `${classes.title} (${classes.unit})`;
+          div.append(title);
+        }
+        for (const key of keys) {
           const row = document.createElement("div");
-          const dot = document.createElement("i");
-          dot.style.background = colour(y);
-          row.append(dot, String(y));
+          const swatch = document.createElement("i");
+          swatch.style.background = colourOf(key);
+          row.append(swatch, key);
           div.append(row);
         }
         return div;

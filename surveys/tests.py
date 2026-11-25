@@ -249,8 +249,22 @@ class PointMovementViewTests(TestCase):
         response = self.client.get(reverse("admin:surveys_pointmovement_changelist"))
         self.assertEqual(response.status_code, 200)
         features = response.context["map_geojson"]["features"]
-        self.assertEqual(len(features), 4 + 3 + 1)
+        # Annual pairs only (S01 3, S02 3, S03 1): the 92-day remeasure is not drawn.
+        self.assertEqual(len(features), 3 + 3 + 1)
         self.assertEqual(features[0]["geometry"]["type"], "LineString")
+        classes = response.context["map_classes"]
+        self.assertEqual(classes["property"], "v")
+        self.assertContains(response, 'id="changelist-map-classes"')
+        # S01 moves 10 m/yr on the grid; true distance (+0.06 %) over 365 days of
+        # a 365.25-day year puts it just above 10 -> "10–20" (upper bounds exclusive).
+        s01 = next(f for f in features if f["properties"]["label"] == "S01")
+        self.assertGreater(s01["properties"]["v"], 10.0)
+        bucket = next(
+            c
+            for c in classes["classes"]
+            if c["max"] is None or s01["properties"]["v"] < c["max"]
+        )
+        self.assertEqual(bucket["label"], "10–20")
         response = self.client.get(
             reverse("admin:surveys_pointmovement_changelist"), {"is_annual__exact": "0"}
         )
