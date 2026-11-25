@@ -6,7 +6,7 @@ from django.conf import settings
 from django.contrib.gis.db import models
 from django.core.files.storage import Storage
 from django.db import transaction
-from django.db.models.functions import Lower, Trim
+from django.db.models.functions import Coalesce, Lower, Trim
 from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.urls import reverse
@@ -131,13 +131,6 @@ class Point(models.Model):
     description = models.TextField(
         blank=True, default="", db_default="", db_comment=DOC["description"]
     )
-    survey_mode = models.CharField(
-        max_length=255,
-        blank=True,
-        default="",
-        db_default="",
-        db_comment=DOC["survey_mode"],
-    )
     created_at = models.DateTimeField(auto_now_add=True, null=True)
 
     class Meta:
@@ -181,11 +174,19 @@ class Measurement(models.Model):
         blank=True, null=True, verbose_name="std h", db_comment=DOC["std_h"]
     )
     meas_strategy = models.CharField(
-        max_length=25, blank=True, null=True, db_comment=DOC["meas_strategy"]
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name="survey mode",
+        db_comment=DOC["meas_strategy"],
     )
     meas_time = models.DateTimeField(blank=True, null=True, db_comment=DOC["meas_time"])
     notes = models.CharField(
-        max_length=250, blank=True, null=True, db_comment=DOC["notes"]
+        max_length=250,
+        blank=True,
+        null=True,
+        verbose_name="measurement notes",
+        db_comment=DOC["notes"],
     )
     lat = models.FloatField(blank=True, null=True, db_comment=DOC["lat"])
     lon = models.FloatField(blank=True, null=True, db_comment=DOC["lon"])
@@ -236,6 +237,20 @@ class Measurement(models.Model):
         return (
             f"Measurement {self.id} - Point {self.point_id} @ Survey {self.survey_id}"
         )
+
+
+def latest_measurement(
+    point: Point, until_year: int | None = None
+) -> "Measurement | None":
+    """The point's most recent measurement (by measurement date, else survey date)."""
+    measurements = Measurement.objects.filter(point=point).select_related("survey")
+    if until_year is not None:
+        measurements = measurements.filter(survey__year__lte=until_year)
+    return (
+        measurements.annotate(day=Coalesce("meas_date", "survey__date"))
+        .order_by("-day", "-id")
+        .first()
+    )
 
 
 def photo_storage() -> Storage:
@@ -459,7 +474,7 @@ class PointsMeasurement(models.Model):
     survey_year = models.BigIntegerField(null=True)
     meas_date = models.DateField(null=True)
     meas_time = models.DateTimeField(null=True)
-    meas_strategy = models.CharField(max_length=25, null=True)
+    meas_strategy = models.CharField(max_length=100, null=True)
     std_east = models.FloatField(null=True)
     std_north = models.FloatField(null=True)
     std_h = models.FloatField(null=True)

@@ -3,15 +3,21 @@
     manage.py import_monograph_texts data/Monografie_2026_parte1_light.pub \\
         data/Monografie_2026_parte2_light.pub [--apply] [--overwrite]
 
-Reads Target / Descrizione / Modalità di rilievo GNSS / NOTA of every point
-page (see `surveys.utils.publisher`) into `target`, `description`,
-`survey_mode` and `notes`. `.pub` files are converted with LibreOffice first,
+Reads Target / Descrizione / NOTA of every point page (see
+`surveys.utils.publisher`) into the point's `target`, `description` and
+`notes`. "Modalità di rilievo GNSS" describes the point across campaigns: its
+current part goes to the survey mode (`meas_strategy`) of the point's latest
+measurement, and the history ("RTK dal 2023, STATICO in precedenza") to the
+point's notes. `.pub` files are converted with LibreOffice first,
 so run this where LibreOffice is installed (not in the server image); `.odg`
 files from an earlier conversion are read directly.
 
 * Labels match case-insensitively; a page for "D38/D38BIS" fills both points.
-* A field that already has text is kept unless `--overwrite`. The CSV import's
+* Target and description already set are kept unless `--overwrite`. Notes are
+  merged: NOTA and the history are appended if not there yet. The CSV import's
   placeholder note counts as empty, and is cleared on points with a page.
+* A measurement's survey mode is only filled when empty — never replaced,
+  even with `--overwrite`: an explicit value (e.g. "RTK SPIN3") stays.
 * Old notes of the form "Target: ... Descrizione: ..." (the FOTO points) are
   split into the fields.
 * "E' un punto FISSO" is only checked against `is_fixed`, never written.
@@ -25,14 +31,16 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from surveys.models import Point
+from surveys.models import Measurement, Point, latest_measurement
 from surveys.utils.publisher import (
     TEXT_FIELDS,
     PointPage,
+    history_note,
     parse_page,
     publisher_to_odg,
     read_odg_pages,
     split_labelled_notes,
+    split_survey_mode,
 )
 
 #: Left in `notes` by the measurement CSV import when it created a point.
@@ -42,6 +50,14 @@ PLACEHOLDER_NOTES = {"Automatically created during measurement CSV import"}
 def current_text(point: Point, field: str) -> str:
     value = (getattr(point, field) or "").strip()
     return "" if field == "notes" and value in PLACEHOLDER_NOTES else value
+
+
+def merged_notes(old: str, *parts: str) -> str:
+    """`old` with each part appended unless it is already in there."""
+    for part in parts:
+        if part and part not in old:
+            old = f"{old} {part}" if old else part
+    return old
 
 
 class Command(BaseCommand):
@@ -60,7 +76,8 @@ class Command(BaseCommand):
         lengths = {f: Point._meta.get_field(f).max_length for f in TEXT_FIELDS}
 
         changes: dict[Point, dict[str, str]] = {}
-        unmatched, kept, too_long = [], [], []
+        modes: dict[Measurement, str] = {}
+        unmatched, kept, too_long, kept_modes = [], [], [], []
         fixed_conflicts = []
         for page in pages:
             for label in page.labels:
@@ -70,17 +87,34 @@ class Command(BaseCommand):
                     continue
                 if page.fixed and not point.is_fixed:
                     fixed_conflicts.append(point.label)
+                latest = latest_measurement(point)
+                mode, history = split_survey_mode(
+                    page.survey_mode, latest.survey.year if latest else None
+                )
+                if mode and latest:
+                    if (latest.meas_strategy or "").strip():
+                        if latest.meas_strategy != mode:
+                            kept_modes.append((point.label, latest, mode))
+                    else:
+                        modes[latest] = mode
                 if (point.notes or "").strip() in PLACEHOLDER_NOTES and not page.notes:
                     changes.setdefault(point, {})["notes"] = ""
+                texts = {
+                    "target": page.target,
+                    "description": page.description,
+                    "notes": merged_notes(
+                        current_text(point, "notes"), page.notes, history_note(history)
+                    ),
+                }
                 for field in TEXT_FIELDS:
-                    new, old = getattr(page, field), current_text(point, field)
+                    new, old = texts[field], current_text(point, field)
                     if not new or new == old:
                         continue
                     if lengths[field] and len(new) > lengths[field]:
                         too_long.append(
                             f"{point.label}.{field} ({len(new)} > {lengths[field]})"
                         )
-                    elif old and not options["overwrite"]:
+                    elif old and field != "notes" and not options["overwrite"]:
                         kept.append((point.label, field, old, new))
                     else:
                         changes.setdefault(point, {})[field] = new
@@ -98,6 +132,7 @@ class Command(BaseCommand):
                 changes[point] = fields
 
         self._report(changes, unmatched, kept, too_long, fixed_conflicts)
+        self._report_modes(modes, kept_modes)
         if not options["apply"]:
             self.stdout.write(
                 self.style.WARNING("\ndry run: nothing written. Re-run with --apply.")
@@ -106,9 +141,23 @@ class Command(BaseCommand):
         with transaction.atomic():
             for point, fields in changes.items():
                 Point.objects.filter(pk=point.pk).update(**fields)
+            for measurement, mode in modes.items():
+                Measurement.objects.filter(pk=measurement.pk).update(meas_strategy=mode)
         self.stdout.write(
-            self.style.SUCCESS(f"\ndone: {len(changes)} point(s) updated")
+            self.style.SUCCESS(
+                f"\ndone: {len(changes)} point(s) and {len(modes)} survey mode(s) updated"
+            )
         )
+
+    def _report_modes(self, modes, kept_modes) -> None:
+        if modes:
+            self.stdout.write("\nsurvey mode of the latest measurement:")
+            for m, mode in sorted(modes.items(), key=lambda kv: kv[0].point.label):
+                self.stdout.write(f"  {m.point.label:<12} {m.survey.year}  {mode}")
+        for label, m, mode in kept_modes:
+            self.stdout.write(
+                f"  {label}: keeps {m.meas_strategy!r} ({m.survey.year}); page says {mode!r}"
+            )
 
     def _read_pages(self, files: list[Path]) -> list[PointPage]:
         pages = []

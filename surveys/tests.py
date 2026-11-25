@@ -561,10 +561,11 @@ class MeasurementMapTests(TestCase):
         self.client.force_login(self.admin)
         m = Measurement.objects.order_by("id").first()
         Measurement.objects.filter(pk=m.pk).update(
-            meas_time=datetime.datetime(2026, 7, 27, 7, 11, 5, tzinfo=datetime.UTC)
+            meas_time=datetime.datetime(2026, 7, 27, 7, 11, 5, tzinfo=datetime.UTC),
+            meas_strategy="RTK RADIO",
         )
         Point.objects.filter(pk=m.point_id).update(
-            target="giallo e nero", description="sulla morena", survey_mode="RTK RADIO"
+            target="giallo e nero", description="sulla morena"
         )
         response = self.client.get(reverse("admin:surveys_measurement_changelist"))
         # Stored in UTC, shown in local (summer) time.
@@ -574,7 +575,12 @@ class MeasurementMapTests(TestCase):
         response = self.client.get(
             reverse("admin:surveys_measurement_change", args=[m.pk])
         )
-        for text in ("Point (monograph)", "giallo e nero", "sulla morena", "RTK RADIO"):
+        for text in (
+            "Point (monograph)",
+            "giallo e nero",
+            "sulla morena",
+            "Survey mode",
+        ):
             self.assertContains(response, text)
         self.assertContains(
             response, reverse("admin:surveys_point_change", args=[m.point_id])
@@ -1066,6 +1072,16 @@ class PublisherParserTests(TestCase):
             parse_page(["Monografie delle mire ottiche", "Redatto nel 2026"])
         )
 
+    def test_split_survey_mode(self):
+        from surveys.utils.publisher import split_survey_mode
+
+        self.assertEqual(split_survey_mode("RTK-RADIO", 2026), ("RTK-RADIO", ""))
+        history = "RTK dal 2023, STATICO in precedenza"
+        self.assertEqual(split_survey_mode(history, 2026), ("RTK", history))
+        tagged = "RTK RADIO, nRTK (2024)"
+        self.assertEqual(split_survey_mode(tagged, 2024), ("nRTK", tagged))
+        self.assertEqual(split_survey_mode(tagged, 2026), ("RTK RADIO", tagged))
+
     def test_split_labelled_notes(self):
         from surveys.utils.publisher import split_labelled_notes
 
@@ -1086,6 +1102,15 @@ class ImportMonographTextsTests(TestCase):
 
         cls.d01 = point("D01bis")
         cls.d02 = point("D02", target="già scritto")
+        coords = {"east": 416500.0, "north": 5089000.0, "h": 2200.0}
+        s2025 = Survey.objects.create(date=datetime.date(2025, 7, 21), year=2025)
+        s2026 = Survey.objects.create(date=datetime.date(2026, 7, 26), year=2026)
+        Measurement.objects.create(point=cls.d01, survey=s2025, **coords)
+        cls.d01_2026 = Measurement.objects.create(point=cls.d01, survey=s2026, **coords)
+        # Explicitly marked: must stay.
+        cls.d02_2026 = Measurement.objects.create(
+            point=cls.d02, survey=s2026, meas_strategy="RTK SPIN3", **coords
+        )
         cls.d63 = point(
             "D63", notes="Automatically created during measurement CSV import"
         )
@@ -1106,8 +1131,10 @@ class ImportMonographTextsTests(TestCase):
             [
                 ["Monografie delle mire ottiche"],
                 ["D01BIS", *HEADER, "Target: giallo e nero", "Descrizione: sulla morena",
-                 "Modalità di rilievo GNSS: RTK"],
-                ["D02", *HEADER, "Target: nuovo testo", "Descrizione: altrove"],
+                 "Modalità di rilievo GNSS: RTK RADIO dal 2023, STATICO in precedenza",
+                 "NOTA: target da sostituire"],
+                ["D02", *HEADER, "Target: nuovo testo", "Descrizione: altrove",
+                 "Modalità di rilievo GNSS: RTK-RADIO"],
                 ["D63", *HEADER, "Target: giallo e blu."],
                 ["D77", *HEADER, "Target: punto sconosciuto"],
             ],
@@ -1133,9 +1160,19 @@ class ImportMonographTextsTests(TestCase):
         output = self.run_command("--apply")
         self.d01.refresh_from_db()
         self.assertEqual(
-            (self.d01.target, self.d01.description, self.d01.survey_mode),
-            ("giallo e nero", "sulla morena", "RTK"),
+            (self.d01.target, self.d01.description), ("giallo e nero", "sulla morena")
         )
+        # Current mode on the latest measurement, history in the point notes.
+        self.d01_2026.refresh_from_db()
+        self.assertEqual(self.d01_2026.meas_strategy, "RTK RADIO")
+        self.assertEqual(
+            self.d01.notes,
+            "target da sostituire Survey mode history: "
+            "RTK RADIO dal 2023, STATICO in precedenza",
+        )
+        # An explicit survey mode is kept.
+        self.d02_2026.refresh_from_db()
+        self.assertEqual(self.d02_2026.meas_strategy, "RTK SPIN3")
         # Existing text kept, the empty field filled.
         self.d02.refresh_from_db()
         self.assertEqual(
@@ -1153,6 +1190,9 @@ class ImportMonographTextsTests(TestCase):
         )
         self.other.refresh_from_db()
         self.assertEqual(self.other.notes, "punto perso")
+
+        # Re-running adds nothing (notes are not appended twice).
+        self.assertIn("0 point(s) to update", self.run_command("--apply"))
 
     def test_overwrite(self):
         self.run_command("--apply", "--overwrite")

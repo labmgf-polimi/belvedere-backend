@@ -200,15 +200,19 @@ survey area, `ST_Transform(geom_enu, 32632)` is off by:
   default; idempotent; `--replace-attached`, `--overwrite-times`.
   `meas_time` is `timestamptz` since `surveys/0033` (the live column was a
   legacy `timestamp without time zone`).
-  **Monograph texts** (`surveys/0034`): `points.target`, `description`,
-  `survey_mode` (+ `notes` for warnings), with a DB-level default `''` so
-  QGIS inserts still work. Filled from the Publisher monographs by
+  **Monograph texts** (`surveys/0034`): `points.target`, `description`
+  (+ `notes` for warnings and history), with a DB-level default `''` so QGIS
+  inserts still work. The **survey mode is per measurement only**:
+  `measurements.meas_strategy` (labelled "survey mode", varchar(100) since
+  `surveys/0035`, which moved and dropped the short-lived `points.survey_mode`).
   `manage.py import_monograph_texts FILE.pub|.odg ...` (LibreOffice converts
-  `.pub` -> `.odg`, so run it locally; parser in `surveys/utils/publisher.py`
-  handles labels running on inside a paragraph, decomposed accents and
-  "E' un punto FISSO", which is only checked against `is_fixed`). Never
-  overwrites text unless `--overwrite`; clears the CSV import's placeholder
-  note; splits FOTO points' "Target: ... Descrizione: ..." notes.
+  `.pub` -> `.odg`, so run it locally; parser in `surveys/utils/publisher.py`)
+  fills target/description, merges NOTA into notes, and splits "Modalità di
+  rilievo GNSS" (`split_survey_mode`): the current mode goes to the point's
+  latest measurement **only if its survey mode is empty** (explicit values such
+  as "RTK SPIN3" stay), the history ("RTK dal 2023, STATICO in precedenza")
+  goes to the point's notes as "Survey mode history: ...". "E' un punto FISSO"
+  is only checked against `is_fixed`. Dry-run by default; idempotent.
   Stable URL `/surveys/photos/<id>/` (staff only) redirects to a 15-minute
   presigned link; the admin (inline on the Measurement form, standalone
   photo page) only ever links to it. Local development uses

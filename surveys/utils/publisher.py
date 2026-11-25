@@ -37,7 +37,9 @@ FIELDS = {
     "modalità di rilievo gnss": "survey_mode",
     "nota": "notes",
 }
-TEXT_FIELDS = ("target", "description", "survey_mode", "notes")
+#: Point fields filled from a page; the survey mode goes to a measurement.
+TEXT_FIELDS = ("target", "description", "notes")
+HISTORY = re.compile(r"\b(19|20)\d{2}\b|in precedenza", re.IGNORECASE)
 FIXED = re.compile(r"^e[’']\s*un punto fisso", re.IGNORECASE)
 #: Where a label or the fixed-point remark starts, even mid-paragraph.
 SEGMENT_START = re.compile(
@@ -145,3 +147,28 @@ def split_labelled_notes(notes: str) -> dict[str, str]:
     for key, value in zip(parts[1::2], parts[2::2], strict=True):
         found[FIELDS[key.lower()]] = value.strip()
     return found
+
+
+def split_survey_mode(text: str, year: int | None) -> tuple[str, str]:
+    """Survey mode of a measurement of `year`, and the history worth a note.
+
+    The pages describe the point across campaigns, e.g. "RTK dal 2023, STATICO
+    in precedenza" or "RTK-RADIO, RTK-SPIN (2025)". A part tagged with `year`
+    wins; otherwise the first part, without its dates, is the current mode.
+
+    Returns:
+        (mode, history): history is the whole text when it mentions years or
+        earlier campaigns, else empty.
+    """
+    text = normalise(text)
+    if not text or not HISTORY.search(text):
+        return text, ""
+    parts = [part.strip() for part in text.split(",") if part.strip()]
+    tagged = [p for p in parts if year and re.search(rf"\(\s*{year}\s*\)", p)]
+    chosen = tagged[0] if tagged else parts[0]
+    mode = re.sub(r"\(\s*\d{4}\s*\)|\bdal\s+\d{4}\b|\bin precedenza\b", "", chosen)
+    return normalise(mode).strip(" ,."), text
+
+
+def history_note(history: str) -> str:
+    return f"Survey mode history: {history}" if history else ""
