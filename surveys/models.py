@@ -448,44 +448,50 @@ class PointsMeasurement(models.Model):
         return f"{self.label} @ {self.survey_year}"
 
 
-class PointsMovementBase(models.Model):
-    """Common columns of the `points_movement_*` views."""
+class PointMovement(models.Model):
+    """Row of the `point_movements` view: one moving point between two measurements.
 
-    id = models.IntegerField(primary_key=True)
+    Horizontal `d`/`v` are the main values; `d_3d`/`v_3d` include the vertical
+    part, i.e. glacier surface lowering. Velocities in m/yr, accelerations in
+    m/yr2. `is_annual` marks pairs about a year apart; acceleration is only
+    computed between consecutive annual pairs. Definition in `surveys/sql.py`.
+    """
+
+    id = models.IntegerField(primary_key=True)  # id of the later measurement
+    point_id = models.IntegerField()
     label = models.CharField(max_length=45)
     survey_year = models.BigIntegerField(null=True)
-    is_fixed = models.BooleanField()
-    survey_date_fin = models.DateField(null=True)
-    survey_date_prev = models.DateField(null=True)
-    dt = models.IntegerField(help_text="Days between the two surveys.")
-    d_e = models.FloatField()
-    d_n = models.FloatField()
-    d_h = models.FloatField()
-    d = models.FloatField(help_text="3D displacement in metres.")
-    v = models.FloatField(help_text="Velocity in m/day.")
-    a = models.FloatField(help_text="Acceleration in m/day².")
+    date_prev = models.DateField()
+    date_fin = models.DateField()
+    dt = models.IntegerField(verbose_name="dt (days)")
+    is_annual = models.BooleanField()
+    geom_line = models.LineStringField(srid=PROJECT_SRID, null=True)
+    d_e = models.FloatField(verbose_name="d_e (m)")
+    d_n = models.FloatField(verbose_name="d_n (m)")
+    d = models.FloatField(verbose_name="d (m)")
+    d_h = models.FloatField(verbose_name="d_h (m)")
+    d_3d = models.FloatField(verbose_name="d_3d (m)")
+    v_e = models.FloatField(verbose_name="v_e (m/yr)")
+    v_n = models.FloatField(verbose_name="v_n (m/yr)")
+    v = models.FloatField(verbose_name="v (m/yr)")
+    v_h = models.FloatField(verbose_name="v_h (m/yr)")
+    v_3d = models.FloatField(verbose_name="v_3d (m/yr)")
+    a_e = models.FloatField(null=True, verbose_name="a_e (m/yr²)")
+    a_n = models.FloatField(null=True, verbose_name="a_n (m/yr²)")
+    a = models.FloatField(null=True, verbose_name="a (m/yr²)")
+    lat_prev = models.FloatField(null=True)
+    lon_prev = models.FloatField(null=True)
+    lat_fin = models.FloatField(null=True)
+    lon_fin = models.FloatField(null=True)
 
     class Meta:
-        abstract = True
+        managed = False
+        db_table = "point_movements"
+        verbose_name = "Point movement (read-only view)"
+        verbose_name_plural = "Point movements (read-only view)"
 
     def __str__(self):
-        return f"{self.label} {self.survey_date_prev}→{self.survey_date_fin}"
-
-
-class PointsMovementRaw(PointsMovementBase):
-    class Meta(PointsMovementBase.Meta):
-        managed = False
-        db_table = "points_movement_raw"
-        verbose_name = "Points movement raw (read-only view)"
-        verbose_name_plural = "Points movements raw (read-only view)"
-
-
-class PointsMovementFiltered(PointsMovementBase):
-    class Meta(PointsMovementBase.Meta):
-        managed = False
-        db_table = "points_movement_filtered"
-        verbose_name = "Points movement filtered (read-only view)"
-        verbose_name_plural = "Points movements filtered (read-only view)"
+        return f"{self.label} {self.date_prev}→{self.date_fin}"
 
 
 class ActivePoint(models.Model):

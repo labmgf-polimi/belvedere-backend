@@ -13,9 +13,8 @@ from surveys.models import (
     Measurement,
     MeasurementPhoto,
     Point,
+    PointMovement,
     PointsMeasurement,
-    PointsMovementFiltered,
-    PointsMovementRaw,
     Survey,
 )
 
@@ -26,8 +25,7 @@ class DatabaseViewTests(TestCase):
 
     VIEW_MODELS = (
         PointsMeasurement,
-        PointsMovementRaw,
-        PointsMovementFiltered,
+        PointMovement,
         ActivePoint,
     )
 
@@ -66,34 +64,34 @@ class SurveysApiTests(APITestCase):
             id=1,
             point=cls.point,
             survey=cls.survey_2015,
-            east=100.0,
-            north=200.0,
-            h=50.0,
+            east=416100.0,
+            north=5089400.0,
+            h=2100.0,
         )
         cls.m2 = Measurement.objects.create(
             id=2,
             point=cls.point,
             survey=cls.survey_2016,
-            east=103.0,
-            north=204.0,
-            h=50.0,
+            east=416103.0,
+            north=5089404.0,
+            h=2100.0,
         )
         # short-gap measurement (dt = 100 days, must be excluded from velocity)
         cls.m3 = Measurement.objects.create(
             id=3,
             point=cls.point,
             survey=cls.survey_2016b,
-            east=104.0,
-            north=205.0,
-            h=50.0,
+            east=416104.0,
+            north=5089405.0,
+            h=2100.0,
         )
         cls.m_fixed = Measurement.objects.create(
             id=4,
             point=cls.fixed_point,
             survey=cls.survey_2015,
-            east=0.0,
-            north=0.0,
-            h=0.0,
+            east=416125.449,
+            north=5089423.209,
+            h=2121.172,
         )
 
     def test_years_distinct_sorted_only_with_measurements(self):
@@ -116,7 +114,7 @@ class SurveysApiTests(APITestCase):
         self.assertEqual(record["point_id"], 1)
         self.assertEqual(record["survey_year"], 2015)
         self.assertEqual(record["survey_date"], "2015-07-20")
-        self.assertEqual(record["east"], 100.0)
+        self.assertEqual(record["east"], 416100.0)
 
     def test_measurements_is_fixed_filter(self):
         response = self.client.get(
@@ -133,7 +131,8 @@ class SurveysApiTests(APITestCase):
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]["survey_year"], 2016)
         self.assertEqual(data[0]["survey_date_fin"], "2016-07-19")
-        self.assertAlmostEqual(data[0]["v"], 5.0 / 365.0)
+        # 5 m on the UTM grid is ~0.06 % more on the ground (ENU, true distance).
+        self.assertAlmostEqual(data[0]["v"], 5.0 / 365.0, delta=5.0 / 365.0 * 1e-3)
 
     def test_velocity_fixed_point_returns_empty(self):
         response = self.client.get(reverse("surveys:point-velocity", args=["FIX1"]))
@@ -143,6 +142,119 @@ class SurveysApiTests(APITestCase):
         response = self.client.get(reverse("surveys:point-velocity", args=["NOPE"]))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
+
+
+class PointMovementViewTests(TestCase):
+    """The point_movements view: horizontal/3D values, flags and acceleration.
+
+    Tolerances: true (ENU) distances are ~0.06 % longer than the UTM grid ones
+    the fixtures are written in, and 365-day intervals are 0.07 % short of the
+    365.25-day year the m/yr units use.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        surveys = {
+            key: Survey.objects.create(date=date, year=date.year)
+            for key, date in {
+                2020: datetime.date(2020, 7, 20),
+                2021: datetime.date(2021, 7, 20),
+                2022: datetime.date(2022, 7, 20),
+                2023: datetime.date(2023, 7, 20),
+                "2023b": datetime.date(2023, 10, 20),  # 92 days later
+            }.items()
+        }
+
+        def series(
+            label: str,
+            east_by_survey: dict,
+            *,
+            fixed: bool = False,
+            dh: float = 0.0,
+            meas_dates: dict | None = None,
+        ):
+            point = Point.objects.create(label=label, is_fixed=fixed, active=True)
+            for i, (key, east) in enumerate(east_by_survey.items()):
+                Measurement.objects.create(
+                    point=point,
+                    survey=surveys[key],
+                    east=416500.0 + east,
+                    north=5089000.0,
+                    h=2200.0 + dh * i,
+                    meas_date=(meas_dates or {}).get(key),
+                )
+
+        # 10 m/yr east, 2 m/yr surface lowering, plus an intra-annual remeasure.
+        series("S01", {2020: 0, 2021: 10, 2022: 20, 2023: 30, "2023b": 32}, dh=-2.0)
+        # Constant acceleration 4 m/yr2: x = 2 t^2 -> yearly steps 2, 6, 10 m.
+        series("S02", {2020: 0, 2021: 2, 2022: 8, 2023: 18})
+        # Moves, but is a fixed mark: never appears.
+        series("FIX", {2020: 0, 2021: 5}, fixed=True)
+        # Measured 20 days after its campaign date.
+        series(
+            "S03",
+            {2020: 0, 2021: 10},
+            meas_dates={2021: datetime.date(2021, 8, 9)},
+        )
+
+    def rows(self, label: str) -> list[PointMovement]:
+        return list(PointMovement.objects.filter(label=label).order_by("date_fin"))
+
+    def test_only_pairs_of_moving_points(self):
+        self.assertEqual(len(self.rows("S01")), 4)  # 5 measurements -> 4 pairs
+        self.assertEqual(self.rows("FIX"), [])
+
+    def test_horizontal_and_3d_values(self):
+        first = self.rows("S01")[0]
+        self.assertTrue(first.is_annual)
+        self.assertAlmostEqual(first.d, 10.0, delta=0.01)
+        self.assertAlmostEqual(first.d_3d, (10.0**2 + 2.0**2) ** 0.5, delta=0.01)
+        self.assertAlmostEqual(first.d_h, -2.0, places=9)
+        self.assertAlmostEqual(first.v, 10.0, delta=0.02)  # m/yr
+        self.assertAlmostEqual(first.v_h, -2.0, delta=0.005)
+
+    def test_acceleration(self):
+        constant = self.rows("S01")
+        self.assertIsNone(constant[0].a)  # no previous interval
+        for row in constant[1:3]:
+            self.assertAlmostEqual(row.a, 0.0, delta=1e-4)
+        self.assertFalse(constant[3].is_annual)  # 92-day remeasure
+        self.assertIsNone(constant[3].a)
+
+        accelerating = self.rows("S02")
+        self.assertIsNone(accelerating[0].a)
+        for row in accelerating[1:]:
+            self.assertAlmostEqual(row.a, 4.0, delta=0.02)
+
+    def test_uses_measurement_date(self):
+        (row,) = self.rows("S03")
+        self.assertEqual(row.date_fin, datetime.date(2021, 8, 9))
+        self.assertEqual(row.dt, 385)
+
+    def test_api_serves_annual_horizontal_velocity_in_m_per_day(self):
+        response = self.client.get(reverse("surveys:point-velocity", args=["S01"]))
+        data = response.json()
+        self.assertEqual(len(data), 3)  # the intra-annual pair is left out
+        self.assertAlmostEqual(data[0]["v"], 10.0 / 365.0, delta=1e-4)
+        self.assertEqual(
+            self.client.get(reverse("surveys:point-velocity", args=["FIX"])).json(), []
+        )
+
+    def test_admin_page_and_map(self):
+        from django.contrib.auth.models import User
+
+        self.client.force_login(
+            User.objects.create_superuser("admin", "a@example.com", "pw")
+        )
+        response = self.client.get(reverse("admin:surveys_pointmovement_changelist"))
+        self.assertEqual(response.status_code, 200)
+        features = response.context["map_geojson"]["features"]
+        self.assertEqual(len(features), 4 + 3 + 1)
+        self.assertEqual(features[0]["geometry"]["type"], "LineString")
+        response = self.client.get(
+            reverse("admin:surveys_pointmovement_changelist"), {"is_annual__exact": "0"}
+        )
+        self.assertEqual(response.context["cl"].result_count, 1)
 
 
 class MergeDuplicatePointsTests(TestCase):
@@ -225,16 +337,17 @@ class MergeDuplicatePointsTests(TestCase):
 
     def test_merging_restores_the_displacement(self):
         """The whole point: before the merge the 2026 row has no predecessor."""
-        before = PointsMovementRaw.objects.get(label="D01BIS")
-        self.assertEqual(before.dt, 0)
-        self.assertAlmostEqual(before.d, 0.0)
+        # Movements exist only for moving points; the fixture's original is a
+        # fixed mark (other tests need that difference), so make it a stake here.
+        Point.objects.filter(pk=self.original.pk).update(is_fixed=False)
+        self.assertFalse(PointMovement.objects.filter(label="D01BIS").exists())
 
         self._run("--apply")
 
-        after = PointsMovementRaw.objects.get(label="D01bis", survey_year=2026)
+        after = PointMovement.objects.get(label="D01bis", survey_year=2026)
         self.assertEqual(after.dt, 370)
-        self.assertAlmostEqual(after.d_e, 3.0, places=6)
-        self.assertAlmostEqual(after.d_n, 4.0, places=6)
+        # (3, 4) m on the UTM grid; d is the true horizontal distance (ENU).
+        self.assertAlmostEqual(after.d, 5.0, delta=0.005)
 
     def test_is_idempotent(self):
         self._run("--apply")
@@ -459,6 +572,37 @@ class PointAdminTests(TestCase):
         self.assertEqual(
             props["url"], reverse("admin:surveys_point_change", args=[self.point.pk])
         )
+
+    def test_point_filters(self):
+        url = reverse("admin:surveys_point_changelist")
+
+        def labels(params: dict) -> set[str]:
+            response = self.client.get(url, params)
+            return {p.label for p in response.context["cl"].result_list}
+
+        self.assertEqual(labels({"measurement__survey__year": 2024}), {"D12"})
+        self.assertEqual(labels({"last_measured": "2025"}), {"D12"})
+        self.assertEqual(labels({"last_measured": "2024"}), set())
+        self.assertEqual(labels({"measurements": "0"}), {"NEW1"})
+        self.assertEqual(labels({"measurements": "2-5"}), {"D12"})
+        self.assertEqual(labels({"has_photos": "no"}), {"D12", "NEW1"})
+        # Filtering on a year must not shrink the measurement count.
+        response = self.client.get(url, {"measurement__survey__year": 2024})
+        self.assertEqual(response.context["cl"].result_list[0]._num_measurements, 2)
+
+    def test_hover_descriptions(self):
+        from surveys.sql import COLUMN_COMMENTS
+
+        response = self.client.get(reverse("admin:surveys_point_changelist"))
+        help_texts = response.context["field_help"]
+        self.assertEqual(help_texts["is_fixed"], COLUMN_COMMENTS["is_fixed"])
+        self.assertIn("last_east", help_texts)
+        self.assertContains(response, 'id="field-help"')
+
+        response = self.client.get(
+            reverse("admin:surveys_point_change", args=[self.point.pk])
+        )
+        self.assertContains(response, 'id="field-help"')
 
     def test_active_points_view_page_is_gone(self):
         self.assertEqual(

@@ -1,0 +1,29 @@
+{% comment %}
+Hover descriptions for FieldHelpMixin: sets `title` on changelist and inline
+column headers (th.column-<name>) and on form labels (.field-<name>), marked
+with a dotted underline. Texts come from the model's db_comment / help_text.
+{% endcomment %}
+{% if field_help %}
+{{ field_help|json_script:"field-help" }}
+<style>
+  [data-field-help] { cursor: help; }
+  [data-field-help] .text > *, label[data-field-help] {
+    text-decoration: underline dotted; text-underline-offset: 3px;
+  }
+</style>
+<script>
+(function () {
+  const help = JSON.parse(document.getElementById("field-help").textContent);
+  for (const [name, text] of Object.entries(help)) {
+    const n = CSS.escape(name);
+    // A form row holding several fields carries all their classes, so only
+    // single-field rows are matched directly; multi-field rows via .fieldBox.
+    const selector = `th.column-${n}, .form-row.field-${n}:not(:has(.fieldBox)) label, .fieldBox.field-${n} label`;
+    for (const el of document.querySelectorAll(selector)) {
+      el.title = text;
+      el.dataset.fieldHelp = "";
+    }
+  }
+})();
+</script>
+{% endif %}

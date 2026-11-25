@@ -59,28 +59,30 @@ COLUMN_COMMENTS: dict[str, str] = {
     "survey_date": "Campaign date.",
     "survey_year": "Campaign year.",
     "last_measure_date": "Date of the most recent measurement of this point.",
-    # --- movement views ---
-    "dt": "Days between the two surveys.",
-    "d_e": "Displacement east between consecutive surveys, m.",
-    "d_n": "Displacement north between consecutive surveys, m.",
-    "d_h": "Displacement in height between consecutive surveys, m.",
-    "d": "3D displacement between consecutive surveys, m.",
-    "v_e": "Velocity east, m/day.",
-    "v_n": "Velocity north, m/day.",
-    "v_h": "Vertical velocity, m/day.",
-    "v": "3D velocity magnitude, m/day.",
-    "a_e": "Acceleration east, m/day2.",
-    "a_n": "Acceleration north, m/day2.",
-    "a_h": "Vertical acceleration, m/day2.",
-    "a": "3D acceleration magnitude, m/day2.",
-    "survey_date_fin": "Date of the later survey of the pair.",
-    "survey_date_prev": "Date of the earlier survey of the pair.",
-    "east_fin": "Easting at the later survey, m, EPSG:7791.",
-    "north_fin": "Northing at the later survey, m, EPSG:7791.",
-    "h_fin": "Ellipsoidal height at the later survey, m.",
-    "east_prev": "Easting at the earlier survey, m, EPSG:7791.",
-    "north_prev": "Northing at the earlier survey, m, EPSG:7791.",
-    "h_prev": "Ellipsoidal height at the earlier survey, m.",
+    # --- point_movements view ---
+    "point_id": "Id of the monitoring point.",
+    "geom_line": "Displacement line from the earlier to the later position, EPSG:7791.",
+    "date_prev": "Date of the earlier measurement (measurement date, else campaign date).",
+    "date_fin": "Date of the later measurement (measurement date, else campaign date).",
+    "dt": "Days between the two measurements.",
+    "is_annual": "True when the two measurements are about a year apart (280 < dt < 400 days).",
+    "d_e": "Displacement east, m (true east, local ENU frame).",
+    "d_n": "Displacement north, m (true north, local ENU frame).",
+    "d": "Horizontal displacement, m. The main displacement value.",
+    "d_h": "Vertical displacement (change of ellipsoidal height), m.",
+    "d_3d": "3D displacement, m. Includes the vertical part, i.e. glacier surface lowering.",
+    "v_e": "Velocity east, m/yr.",
+    "v_n": "Velocity north, m/yr.",
+    "v": "Horizontal velocity, m/yr. The main velocity value.",
+    "v_h": "Vertical velocity, m/yr (negative = surface lowering).",
+    "v_3d": "3D velocity, m/yr. Includes glacier surface lowering.",
+    "a_e": "Acceleration east, m/yr2. Annual consecutive intervals only.",
+    "a_n": "Acceleration north, m/yr2. Annual consecutive intervals only.",
+    "a": "Change of horizontal velocity, m/yr2 (positive = speeding up). Annual consecutive intervals only.",
+    "lat_prev": "Latitude of the earlier position, WGS 84.",
+    "lon_prev": "Longitude of the earlier position, WGS 84.",
+    "lat_fin": "Latitude of the later position, WGS 84.",
+    "lon_fin": "Longitude of the later position, WGS 84.",
 }
 
 TABLE_COMMENTS: dict[str, str] = {
@@ -150,86 +152,114 @@ CREATE OR REPLACE VIEW public.points_measurements AS
 """
 
 
-POINTS_MOVEMENT_RAW_SQL = """
-CREATE OR REPLACE VIEW public.points_movement_raw AS
- WITH laggedmeasurements AS (
-         SELECT meas_1.id,
-            lag(meas_1.east) OVER (PARTITION BY meas_1.label ORDER BY meas_1.survey_date) AS prev_east,
-            lag(meas_1.north) OVER (PARTITION BY meas_1.label ORDER BY meas_1.survey_date) AS prev_north,
-            lag(meas_1.h) OVER (PARTITION BY meas_1.label ORDER BY meas_1.survey_date) AS prev_h,
-            lag(meas_1.survey_date) OVER (PARTITION BY meas_1.label ORDER BY meas_1.survey_date) AS prev_survey_date
-           FROM points_measurements meas_1
-        ), diffs AS (
-         SELECT meas_1.id,
-            COALESCE(meas_1.survey_date - lm_1.prev_survey_date, 0) AS dt,
-            COALESCE(meas_1.east - lm_1.prev_east, 0::double precision) AS d_e,
-            COALESCE(meas_1.north - lm_1.prev_north, 0::double precision) AS d_n,
-            COALESCE(meas_1.h - lm_1.prev_h, 0::double precision) AS d_h
-           FROM points_measurements meas_1
-             JOIN laggedmeasurements lm_1 ON meas_1.id = lm_1.id
-        )
- SELECT meas.id,
-    meas.geom,
-    meas.label,
-    meas.survey_year,
-    meas.is_fixed,
-    meas.survey_date AS survey_date_fin,
-    lm.prev_survey_date AS survey_date_prev,
-    diffs.dt,
-    meas.east AS east_fin,
-    meas.north AS north_fin,
-    meas.h AS h_fin,
-    lm.prev_east AS east_prev,
-    lm.prev_north AS north_prev,
-    lm.prev_h AS h_prev,
-    diffs.d_e,
-    diffs.d_n,
-    diffs.d_h,
-    COALESCE(sqrt(pow(diffs.d_e, 2::double precision) + pow(diffs.d_n, 2::double precision) + pow(diffs.d_h, 2::double precision)), 0::double precision) AS d,
-    COALESCE(diffs.d_e / NULLIF(diffs.dt, 0)::double precision, 0::double precision) AS v_e,
-    COALESCE(diffs.d_n / NULLIF(diffs.dt, 0)::double precision, 0::double precision) AS v_n,
-    COALESCE(diffs.d_h / NULLIF(diffs.dt, 0)::double precision, 0::double precision) AS v_h,
-    COALESCE(sqrt(pow(diffs.d_e, 2::double precision) + pow(diffs.d_n, 2::double precision) + pow(diffs.d_h, 2::double precision)) / NULLIF(diffs.dt, 0)::double precision, 0::double precision) AS v,
-    COALESCE(diffs.d_e / NULLIF(pow(diffs.dt::double precision, 2::double precision), 0::double precision), 0::double precision) AS a_e,
-    COALESCE(diffs.d_n / NULLIF(pow(diffs.dt::double precision, 2::double precision), 0::double precision), 0::double precision) AS a_n,
-    COALESCE(diffs.d_h / NULLIF(pow(diffs.dt::double precision, 2::double precision), 0::double precision), 0::double precision) AS a_h,
-    COALESCE(sqrt(pow(diffs.d_e, 2::double precision) + pow(diffs.d_n, 2::double precision) + pow(diffs.d_h, 2::double precision)) / NULLIF(pow(diffs.dt::double precision, 2::double precision), 0::double precision), 0::double precision) AS a
-   FROM points_measurements meas
-     JOIN laggedmeasurements lm ON meas.id = lm.id
-     JOIN diffs ON meas.id = diffs.id;
-"""
+#: Days per year for the m/yr units (Julian year).
+DAYS_PER_YEAR = 365.25
 
-POINTS_MOVEMENT_FILTERED_SQL = """
-CREATE OR REPLACE VIEW public.points_movement_filtered AS
+#: Gap, in days, between two measurements that counts as one year apart.
+ANNUAL_DT_MIN, ANNUAL_DT_MAX = 280, 400
+
+POINT_MOVEMENTS_SQL = f"""
+CREATE OR REPLACE VIEW public.point_movements AS
+ WITH series AS (
+         -- Moving points only: fixed reference marks never get a movement.
+         SELECT m.id,
+            m.point AS point_id,
+            p.label,
+            s.year AS survey_year,
+            COALESCE(m.meas_date, s.date) AS day,
+            m.geom,
+            m.lat,
+            m.lon,
+            m.h,
+            -- Horizontal displacements in the local ENU frame: true metric
+            -- distances, unlike UTM grid distances (~0.06 % longer here).
+            ST_X(m.geom_enu) AS e,
+            ST_Y(m.geom_enu) AS n
+           FROM measurements m
+             JOIN points p ON p.id = m.point
+             JOIN surveys s ON s.id = m.survey
+          WHERE NOT p.is_fixed
+        ), pairs AS (
+         -- Each measurement paired with the previous one of the same point.
+         SELECT id,
+            point_id,
+            label,
+            survey_year,
+            lag(day) OVER w AS date_prev,
+            day AS date_fin,
+            day - lag(day) OVER w AS dt,
+            ST_MakeLine(lag(geom) OVER w, geom) AS geom_line,
+            lag(lat) OVER w AS lat_prev,
+            lag(lon) OVER w AS lon_prev,
+            lat AS lat_fin,
+            lon AS lon_fin,
+            e - lag(e) OVER w AS d_e,
+            n - lag(n) OVER w AS d_n,
+            h - lag(h) OVER w AS d_h
+           FROM series
+          WINDOW w AS (PARTITION BY point_id ORDER BY day, id)
+        ), rates AS (
+         -- The first measurement of a series has no pair; identical
+         -- consecutive coordinates are a copied value, not a movement.
+         SELECT pairs.*,
+            sqrt(d_e ^ 2 + d_n ^ 2) AS d,
+            sqrt(d_e ^ 2 + d_n ^ 2 + d_h ^ 2) AS d_3d,
+            dt > {ANNUAL_DT_MIN} AND dt < {ANNUAL_DT_MAX} AS is_annual,
+            -- Computed in m/day, exposed in m/yr.
+            d_e / dt * {DAYS_PER_YEAR} AS v_e,
+            d_n / dt * {DAYS_PER_YEAR} AS v_n,
+            sqrt(d_e ^ 2 + d_n ^ 2) / dt * {DAYS_PER_YEAR} AS v,
+            d_h / dt * {DAYS_PER_YEAR} AS v_h,
+            sqrt(d_e ^ 2 + d_n ^ 2 + d_h ^ 2) / dt * {DAYS_PER_YEAR} AS v_3d
+           FROM pairs
+          WHERE dt > 0 AND (d_e <> 0 OR d_n <> 0 OR d_h <> 0)
+        ), previous AS (
+         SELECT rates.*,
+            lag(date_fin) OVER w AS prev_date_fin,
+            lag(is_annual) OVER w AS prev_is_annual,
+            lag(dt) OVER w AS prev_dt,
+            lag(v_e) OVER w AS prev_v_e,
+            lag(v_n) OVER w AS prev_v_n,
+            lag(v) OVER w AS prev_v
+           FROM rates
+          WINDOW w AS (PARTITION BY point_id ORDER BY date_fin, id)
+        )
+ -- Acceleration: a mean velocity over an interval is the velocity at its
+ -- midpoint, so a = (v_i - v_(i-1)) / (time between the two midpoints)
+ --             = (v_i - v_(i-1)) / ((dt_i + dt_(i-1)) / 2),
+ -- exact under constant acceleration and 0 at constant speed. Only between
+ -- two annual intervals that share a measurement.
  SELECT id,
-    geom,
+    point_id,
     label,
     survey_year,
-    is_fixed,
-    survey_date_fin,
-    survey_date_prev,
+    date_prev,
+    date_fin,
     dt,
-    east_fin,
-    north_fin,
-    h_fin,
-    east_prev,
-    north_prev,
-    h_prev,
+    is_annual,
+    geom_line,
     d_e,
     d_n,
-    d_h,
     d,
+    d_h,
+    d_3d,
     v_e,
     v_n,
-    v_h,
     v,
-    a_e,
-    a_n,
-    a_h,
-    a
-   FROM points_movement_raw
-  WHERE is_fixed = false AND dt > 280 AND dt < 400 AND d > 0::double precision
-  ORDER BY label, survey_date_fin DESC;
+    v_h,
+    v_3d,
+    CASE WHEN is_annual AND prev_is_annual AND prev_date_fin = date_prev
+         THEN (v_e - prev_v_e) / ((dt + prev_dt) / 2.0 / {DAYS_PER_YEAR}) END AS a_e,
+    CASE WHEN is_annual AND prev_is_annual AND prev_date_fin = date_prev
+         THEN (v_n - prev_v_n) / ((dt + prev_dt) / 2.0 / {DAYS_PER_YEAR}) END AS a_n,
+    CASE WHEN is_annual AND prev_is_annual AND prev_date_fin = date_prev
+         THEN (v - prev_v) / ((dt + prev_dt) / 2.0 / {DAYS_PER_YEAR}) END AS a,
+    lat_prev,
+    lon_prev,
+    lat_fin,
+    lon_fin
+   FROM previous
+  ORDER BY label, date_fin DESC;
 """
 
 ACTIVE_POINTS_SQL = """
@@ -270,11 +300,11 @@ POINTS_MEASUREMENTS_COLUMNS = (
 )  # fmt: skip
 
 
-POINTS_MOVEMENT_COLUMNS = (
-    "geom", "label", "survey_year", "is_fixed", "survey_date_fin",
-    "survey_date_prev", "dt", "east_fin", "north_fin", "h_fin", "east_prev",
-    "north_prev", "h_prev", "d_e", "d_n", "d_h", "d", "v_e", "v_n", "v_h", "v",
-    "a_e", "a_n", "a_h", "a",
+POINT_MOVEMENTS_COLUMNS = (
+    "point_id", "label", "survey_year", "date_prev", "date_fin", "dt",
+    "is_annual", "geom_line", "d_e", "d_n", "d", "d_h", "d_3d", "v_e", "v_n",
+    "v", "v_h", "v_3d", "a_e", "a_n", "a", "lat_prev", "lon_prev", "lat_fin",
+    "lon_fin",
 )  # fmt: skip
 
 ACTIVE_POINTS_COLUMNS = (
@@ -295,10 +325,8 @@ def create_views() -> str:
     return (
         points_measurements_sql()
         + comment_columns("points_measurements", POINTS_MEASUREMENTS_COLUMNS)
-        + POINTS_MOVEMENT_RAW_SQL
-        + comment_columns("points_movement_raw", POINTS_MOVEMENT_COLUMNS)
-        + POINTS_MOVEMENT_FILTERED_SQL
-        + comment_columns("points_movement_filtered", POINTS_MOVEMENT_COLUMNS)
+        + POINT_MOVEMENTS_SQL
+        + comment_columns("point_movements", POINT_MOVEMENTS_COLUMNS)
         + ACTIVE_POINTS_SQL
         + comment_columns("active_points", ACTIVE_POINTS_COLUMNS)
     )
@@ -306,8 +334,12 @@ def create_views() -> str:
 
 CREATE_VIEWS = create_views()
 
-#: Reverse order, so nothing is dropped while still depended on.
+#: Reverse order, so nothing is dropped while still depended on. The two
+#: `points_movement_*` views were replaced by `point_movements` in surveys/0031;
+#: they stay listed because older migrations (0024, 0028) run this on fresh
+#: databases where they still exist.
 DROP_VIEWS = """
+DROP VIEW IF EXISTS public.point_movements;
 DROP VIEW IF EXISTS public.points_movement_filtered;
 DROP VIEW IF EXISTS public.points_movement_raw;
 DROP VIEW IF EXISTS public.active_points;

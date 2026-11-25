@@ -2,8 +2,8 @@
 
 A CSV import that looks points up by exact label creates `D01BIS` alongside an
 existing `D01bis`, splitting a stake's history in two. The damage is not just
-untidy: `points_movement_raw` partitions by label, so the orphaned campaign
-gets `dt = 0` and no displacement at all.
+untidy: each half has its own measurement series, so the orphaned campaign
+has no predecessor and no displacement at all in `point_movements`.
 
 Dry-run by default; `--apply` is required to write anything.
 """
@@ -151,5 +151,5 @@ class Command(BaseCommand):
             )
         )
         self.stdout.write(
-            "Displacements recompute automatically — points_movement_* are views."
+            "Displacements recompute automatically — point_movements is a view."
         )

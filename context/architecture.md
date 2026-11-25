@@ -197,15 +197,35 @@ survey area, `ST_Transform(geom_enu, 32632)` is off by:
   relation on `measurements`); `photo_url` in `/surveys/measurements/`;
   orphaned-object cleanup command.
 - Unmanaged read-only models over the Postgres views (`PointsMeasurement`,
-  `PointsMovementRaw`, `PointsMovementFiltered`, `ActivePoint`) — browse-only
-  admin pages; view DDL lives in migration `0011_adopt_views`.
+  `PointMovement`, `ActivePoint`); view DDL lives in `surveys/sql.py`
+  (`create_views()`), applied by migrations. Only `PointMovement` has an admin
+  page; `points_measurements` and `active_points` are covered by the
+  Measurement and Point pages and stay for QGIS.
+- **`point_movements`** (since `surveys/0031`, replacing `points_movement_raw`
+  and `points_movement_filtered`): one row per pair of consecutive
+  measurements of a **moving** point (fixed marks excluded; no row for the
+  first measurement of a series; identical consecutive coordinates skipped).
+  Dates are `COALESCE(meas_date, survey date)`. `d`/`v` are **horizontal**,
+  from `geom_enu` (true distances; UTM grid distances are ~0.06 % shorter
+  here, and ENU `d_e`/`d_n` are true east/north, ~0.8 deg from grid axes);
+  `d_3d`/`v_3d` include the vertical part, i.e. glacier surface lowering —
+  typically 13 % above `v`, up to 3x for slow thinning stakes. Units m, m/yr,
+  m/yr2 (365.25-day year). `is_annual` = 280 < dt < 400 days; intra-annual and
+  multi-year pairs are kept for future use. Acceleration
+  `a = (v_i - v_(i-1)) / ((dt_i + dt_(i-1))/2)` — the mean velocity of an
+  interval is the velocity at its midpoint, so this is exact under constant
+  acceleration and 0 at constant speed — only between two contiguous annual
+  intervals. (The old views used `d/dt^2`, which is not an acceleration.)
+  `geom_line` (7791) is the displacement line for QGIS; the admin map draws
+  the same lines from `lat/lon_prev` -> `lat/lon_fin`.
 
 API under `/surveys/` (plain JSON arrays, no pagination):
 - `years/` — distinct survey years with measurements
 - `measurements/?year=YYYY&is_fixed=true|false` — field names match the
   legacy `points_measurements` view
-- `points/<label>/velocity/` — yearly velocity series, computed in
-  `surveys/utils/velocity.py` (280 < dt < 400 days window, d > 0, v = d/dt)
+- `points/<label>/velocity/` — yearly **horizontal** velocity series in
+  **m/day**, read from `point_movements` (`is_annual` rows, `v / 365.25`);
+  same response shape as before. Before `surveys/0031` `v` was 3D.
 
 ### `image_index` — time-lapse camera catalogue
 - `Camera`: S3 bucket/prefix, 3D PostGIS `location` (32632) plus `location_enu`

@@ -10,9 +10,9 @@ from rest_framework.response import Response
 
 from image_index.s3_utils import build_readonly_s3_client, generate_presigned_url
 
-from .models import Measurement, MeasurementPhoto, Survey
+from .models import Measurement, MeasurementPhoto, PointMovement, Survey
 from .serializers import MeasurementSerializer
-from .utils.velocity import compute_point_velocities
+from .sql import DAYS_PER_YEAR
 
 
 @api_view(["GET"])
@@ -53,16 +53,26 @@ class MeasurementListView(ListAPIView):
 
 @api_view(["GET"])
 def point_velocity(request: Request, label: str) -> Response:
-    """Yearly velocity series for a point, like the points_movement_filtered view.
+    """Yearly horizontal velocity series of a point, in m/day.
 
-    Returns an empty list for unknown or fixed points (legacy behaviour).
+    Read from the `point_movements` view (annual pairs only), which works in
+    m/yr; the response keeps its original shape and m/day unit. Empty for
+    unknown or fixed points (fixed points have no movements).
     """
-    measurements = list(
-        Measurement.objects.filter(point__label=label, point__is_fixed=False)
-        .select_related("survey")
-        .order_by("survey__date")
+    movements = PointMovement.objects.filter(label=label, is_annual=True).order_by(
+        "date_fin"
     )
-    return Response(compute_point_velocities(measurements))
+    return Response(
+        [
+            {
+                "survey_year": m.survey_year,
+                "survey_date_ini": m.date_prev,
+                "survey_date_fin": m.date_fin,
+                "v": m.v / DAYS_PER_YEAR,
+            }
+            for m in movements
+        ]
+    )
 
 
 #: Lifetime of the presigned S3 link a photo URL redirects to, seconds.

@@ -60,9 +60,9 @@ used to read straight from the views (`surveys/urls.py`, `views.py`,
 - `GET /surveys/years/` — distinct survey years with measurements
 - `GET /surveys/measurements/?year=YYYY&is_fixed=false` — plain JSON array,
   field names identical to the `points_measurements` view
-- `GET /surveys/points/<label>/velocity/` — yearly velocity series computed in
-  Python (`surveys/utils/velocity.py`), verified identical to
-  `points_movement_filtered` over all 93 labels / 171 records
+- `GET /surveys/points/<label>/velocity/` — yearly velocity series. Since
+  `surveys/0031` it reads the `point_movements` view (horizontal, m/day);
+  `surveys/utils/velocity.py` was removed
 
 The DB views therefore remain only for QGIS; external consumers should use
 the API.

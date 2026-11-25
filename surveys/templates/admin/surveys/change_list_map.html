@@ -52,27 +52,39 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
       const years = [...new Set(data.features.map(f => f.properties.year))].sort();
       const colour = y => palette[years.indexOf(y) % palette.length];
 
+      const dot = (latlng, year, radius) => L.circleMarker(latlng, {
+        radius, weight: 1, color: "#000", fillColor: colour(year), fillOpacity: 0.9,
+      });
       const overlays = {};
       for (const year of years) {
-        overlays[String(year)] = L.geoJSON(
+        const group = L.geoJSON(
           { type: "FeatureCollection", features: data.features.filter(f => f.properties.year === year) },
           {
-            pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-              radius: 5, weight: 1, color: "#000", fillColor: colour(year), fillOpacity: 0.9,
-            }),
+            pointToLayer: (f, latlng) => dot(latlng, year, 5),
+            // Lines (movements): earlier -> later position.
+            style: () => ({ color: colour(year), weight: 3, opacity: 0.9 }),
             onEachFeature: (f, layer) => {
               const p = f.properties;
               const a = document.createElement("a");
               a.href = p.url;
               a.textContent = p.label;
+              const parts = [p.date ?? year];
+              if (p.v != null) parts.push(`v ${p.v.toFixed(2)} m/yr`, `d ${p.d.toFixed(2)} m`);
+              else if (p.h != null) parts.push(`h ${p.h.toFixed(2)} m`);
               const box = document.createElement("div");
-              box.append(a, document.createElement("br"),
-                         `${p.date ?? year} · h ${p.h?.toFixed(2)} m`);
+              box.append(a, document.createElement("br"), parts.join(" · "));
               layer.bindPopup(box);
               layer.bindTooltip(p.label);
             },
           }
-        ).addTo(map);
+        );
+        // A dot at the later end shows which way each line points.
+        for (const f of data.features) {
+          if (f.properties.year !== year || f.geometry.type !== "LineString") continue;
+          const [lon, lat] = f.geometry.coordinates[1];
+          dot([lat, lon], year, 3).addTo(group);
+        }
+        overlays[String(year)] = group.addTo(map);
       }
       L.control.layers(baseLayers, overlays).addTo(map);
 
@@ -108,4 +120,5 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
   </script>
 {% endif %}
 {{ block.super }}
+{% include "admin/surveys/field_help.html" %}
 {% endblock %}

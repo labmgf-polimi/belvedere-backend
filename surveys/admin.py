@@ -16,8 +16,7 @@ from .models import (
     Measurement,
     MeasurementPhoto,
     Point,
-    PointsMovementFiltered,
-    PointsMovementRaw,
+    PointMovement,
     Product2D,
     Product3D,
     Survey,
@@ -25,6 +24,8 @@ from .models import (
     Volume,
 )
 from .resources import MeasurementResource
+from .sql import COLUMN_COMMENTS as DOC
+from .sql import POINT_MOVEMENTS_COLUMNS
 
 
 def changelist_geojson(
@@ -35,24 +36,30 @@ def changelist_geojson(
     Args:
         queryset: Rows to plot.
         fields: Feature property -> ORM lookup. Must contain `lat` and `lon`
-            (WGS 84, computed in the database); the remaining keys become
-            popup properties (`label`, `year`, `date`, `h`).
+            (WGS 84, computed in the database). With `lat_prev`/`lon_prev` too,
+            each feature is a line from the earlier to that position. The
+            remaining keys become popup properties (`label`, `year`, `date`, ...).
         url_name: Admin URL name each feature links to, reversed with the row pk.
         limit: Maximum number of features.
     """
-    lat, lon = fields["lat"], fields["lon"]
-    props = {k: v for k, v in fields.items() if k not in ("lat", "lon")}
-    rows = (
-        queryset.filter(**{f"{lat}__isnull": False, f"{lon}__isnull": False})
-        .order_by()
-        .values("pk", *fields.values())[:limit]
-    )
+    coords = {"lat", "lon", "lat_prev", "lon_prev"}
+    props = {k: v for k, v in fields.items() if k not in coords}
+    not_null = {f"{fields[k]}__isnull": False for k in coords if k in fields}
+    rows = queryset.filter(**not_null).order_by().values("pk", *fields.values())[:limit]
+
+    def geometry(r: dict) -> dict:
+        end = [r[fields["lon"]], r[fields["lat"]]]
+        if "lat_prev" not in fields:
+            return {"type": "Point", "coordinates": end}
+        start = [r[fields["lon_prev"]], r[fields["lat_prev"]]]
+        return {"type": "LineString", "coordinates": [start, end]}
+
     return {
         "type": "FeatureCollection",
         "features": [
             {
                 "type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [r[lon], r[lat]]},
+                "geometry": geometry(r),
                 "properties": {
                     **{k: r[v] for k, v in props.items()},
                     "url": reverse(url_name, args=[r["pk"]]),
@@ -99,6 +106,125 @@ class ChangeListMapMixin:
         return response
 
 
+def titled_filter(base: type[admin.FieldListFilter], title: str) -> type:
+    """`base` with a custom sidebar title (Django uses the field name)."""
+
+    class TitledFilter(base):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.title = title
+
+    return TitledFilter
+
+
+class HasPhotosFilter(admin.SimpleListFilter):
+    title = "photos"
+    parameter_name = "has_photos"
+    #: Path from the admin's model to MeasurementPhoto.
+    photos_lookup = "photos"
+
+    def lookups(self, request: HttpRequest, model_admin) -> list[tuple[str, str]]:
+        return [("yes", "With photos"), ("no", "Without photos")]
+
+    def queryset(self, request: HttpRequest, queryset: QuerySet) -> QuerySet:
+        isnull = {"yes": False, "no": True}.get(self.value())
+        if isnull is None:
+            return queryset
+        return queryset.filter(**{f"{self.photos_lookup}__isnull": isnull}).distinct()
+
+
+class PointHasPhotosFilter(HasPhotosFilter):
+    photos_lookup = "measurement__photos"
+
+
+class LastMeasuredFilter(admin.SimpleListFilter):
+    """Points by the year of their latest measurement (PointAdmin annotation)."""
+
+    title = "last measured in"
+    parameter_name = "last_measured"
+
+    def lookups(self, request: HttpRequest, model_admin) -> list[tuple[str, str]]:
+        years = (
+            Survey.objects.filter(measurement__isnull=False)
+            .order_by("-year")
+            .values_list("year", flat=True)
+            .distinct()
+        )
+        return [(str(year), str(year)) for year in years]
+
+    def queryset(self, request: HttpRequest, queryset: QuerySet) -> QuerySet:
+        if self.value():
+            return queryset.filter(_last_year=self.value())
+        return queryset
+
+
+class MeasurementCountFilter(admin.SimpleListFilter):
+    """Points by number of measurements (PointAdmin annotation)."""
+
+    title = "number of measurements"
+    parameter_name = "measurements"
+    RANGES: dict[str, tuple[int, int | None]] = {
+        "0": (0, 0),
+        "1": (1, 1),
+        "2-5": (2, 5),
+        "6+": (6, None),
+    }
+
+    def lookups(self, request: HttpRequest, model_admin) -> list[tuple[str, str]]:
+        return [
+            ("0", "None"),
+            ("1", "Only one"),
+            ("2-5", "2 to 5"),
+            ("6+", "6 or more"),
+        ]
+
+    def queryset(self, request: HttpRequest, queryset: QuerySet) -> QuerySet:
+        if self.value() not in self.RANGES:
+            return queryset
+        low, high = self.RANGES[self.value()]
+        queryset = queryset.filter(_num_measurements__gte=low)
+        return (
+            queryset if high is None else queryset.filter(_num_measurements__lte=high)
+        )
+
+
+class FieldHelpMixin:
+    """Hover descriptions on list columns, inline columns and form labels.
+
+    Texts are each model field's `db_comment` (the description QGIS shows) or
+    `help_text`, so they are written once; `field_help` adds entries for
+    computed columns or overrides.
+    """
+
+    change_form_template = "admin/surveys/change_form_help.html"
+    field_help: dict[str, str] = {}
+
+    def get_field_help(self) -> dict[str, str]:
+        models = [self.model, *(inline.model for inline in self.inlines)]
+        texts: dict[str, str] = {}
+        for model in reversed(models):  # the admin's own model wins on clashes
+            for f in model._meta.concrete_fields:
+                if f.db_comment or f.help_text:
+                    texts[f.name] = str(f.db_comment or f.help_text)
+        return texts | self.field_help
+
+    def changelist_view(
+        self, request: HttpRequest, extra_context: dict | None = None
+    ) -> HttpResponse:
+        context = {**(extra_context or {}), "field_help": self.get_field_help()}
+        return super().changelist_view(request, context)
+
+    def changeform_view(
+        self,
+        request: HttpRequest,
+        object_id: str | None = None,
+        form_url: str = "",
+        extra_context: dict | None = None,
+    ) -> HttpResponse:
+        context = {**(extra_context or {}), "field_help": self.get_field_help()}
+        return super().changeform_view(request, object_id, form_url, context)
+
+
 @admin.register(Survey)
 class SurveyAdmin(admin.ModelAdmin):
     list_display = ("id", "date", "year", "notes")
@@ -142,7 +268,16 @@ class FlightAdmin(admin.ModelAdmin):
 
 
 @admin.register(Point)
-class PointAdmin(ChangeListMapMixin, admin.ModelAdmin):
+class PointAdmin(FieldHelpMixin, ChangeListMapMixin, admin.ModelAdmin):
+    field_help = {
+        "first_survey_date": "Date of the first survey that measured this point.",
+        "last_survey_date": "Date of the most recent survey that measured this point.",
+        "last_east": "Easting at the latest measurement, m, EPSG:7791.",
+        "last_north": "Northing at the latest measurement, m, EPSG:7791.",
+        "last_h": "Ellipsoidal height at the latest measurement, m.",
+        "num_measurements": "Number of measurements of this point.",
+        "measurements_link": "Open this point's measurements.",
+    }
     # One marker per point at its latest measurement, coloured by that survey's year.
     map_fields = {
         "lat": "_last_lat",
@@ -171,7 +306,18 @@ class PointAdmin(ChangeListMapMixin, admin.ModelAdmin):
         "created_at",
     )
     search_fields = ("id", "label", "notes")
-    list_filter = ("active", "is_fixed", "ref_date")
+    list_filter = (
+        "active",
+        "is_fixed",
+        (
+            "measurement__survey__year",
+            titled_filter(admin.AllValuesFieldListFilter, "measured in"),
+        ),
+        LastMeasuredFilter,
+        MeasurementCountFilter,
+        PointHasPhotosFilter,
+        "ref_date",
+    )
     ordering = ("label", "id")
     readonly_fields = (
         "created_at",
@@ -303,38 +449,25 @@ class MeasurementPhotoInline(admin.TabularInline):
         return photo_preview(obj)
 
 
-def titled_filter(base: type[admin.FieldListFilter], title: str) -> type:
-    """`base` with a custom sidebar title (Django uses the field name)."""
-
-    class TitledFilter(base):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.title = title
-
-    return TitledFilter
-
-
-class HasPhotosFilter(admin.SimpleListFilter):
-    title = "photos"
-    parameter_name = "has_photos"
-
-    def lookups(self, request: HttpRequest, model_admin) -> list[tuple[str, str]]:
-        return [("yes", "With photos"), ("no", "Without photos")]
-
-    def queryset(self, request: HttpRequest, queryset: QuerySet) -> QuerySet:
-        if self.value() == "yes":
-            return queryset.filter(photos__isnull=False).distinct()
-        if self.value() == "no":
-            return queryset.filter(photos__isnull=True)
-        return queryset
-
-
 @admin.register(Measurement)
-class MeasurementAdmin(ChangeListMapMixin, ImportExportMixin, gis_admin.GISModelAdmin):
+class MeasurementAdmin(
+    FieldHelpMixin, ChangeListMapMixin, ImportExportMixin, gis_admin.GISModelAdmin
+):
     resource_classes = [MeasurementResource]
     import_template_name = "admin/surveys/import_measurement.html"
     gis_widget = MapWidget
     # import-export wraps the mixin's change_list_template, so its buttons stay.
+    field_help = {
+        "point": "Monitoring point that was measured.",
+        "survey": "Survey campaign the measurement belongs to.",
+        "label": DOC["label"],
+        "survey_year": DOC["survey_year"],
+        "survey_date": DOC["survey_date"],
+        "is_fixed": DOC["is_fixed"],
+        "is_active": DOC["is_active"],
+        "photo_count": "Number of photos of this measurement.",
+        "enu_coordinates": DOC["geom_enu"],
+    }
 
     # Point and survey columns come through the foreign keys (list_select_related),
     # so this page covers everything the points_measurements view showed.
@@ -516,27 +649,39 @@ class ReadOnlyViewAdmin(admin.ModelAdmin):
         return False
 
 
-class PointsMovementAdmin(ReadOnlyViewAdmin):
+@admin.register(PointMovement)
+class PointMovementAdmin(FieldHelpMixin, ChangeListMapMixin, ReadOnlyViewAdmin):
+    """Movements of the moving points; the map draws each one as a line."""
+
+    map_fields = {
+        "lat_prev": "lat_prev",
+        "lon_prev": "lon_prev",
+        "lat": "lat_fin",
+        "lon": "lon_fin",
+        "label": "label",
+        "year": "survey_year",
+        "date": "date_fin",
+        "v": "v",
+        "d": "d",
+    }
+    # Links to the later measurement of the pair (the view's id).
+    map_url_name = "admin:surveys_measurement_change"
+    field_help = {column: DOC[column] for column in POINT_MOVEMENTS_COLUMNS}
+
     list_display = (
         "label",
         "survey_year",
-        "survey_date_prev",
-        "survey_date_fin",
+        "date_prev",
+        "date_fin",
         "dt",
+        "is_annual",
         "d",
         "v",
         "a",
+        "v_h",
+        "d_3d",
+        "v_3d",
     )
     search_fields = ("label",)
-    list_filter = ("survey_year", "is_fixed")
-    ordering = ("label", "-survey_date_fin")
-
-
-@admin.register(PointsMovementRaw)
-class PointsMovementRawAdmin(PointsMovementAdmin):
-    pass
-
-
-@admin.register(PointsMovementFiltered)
-class PointsMovementFilteredAdmin(PointsMovementAdmin):
-    pass
+    list_filter = ("is_annual", "survey_year")
+    ordering = ("label", "-date_fin")

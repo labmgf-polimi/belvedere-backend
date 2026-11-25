@@ -82,7 +82,7 @@ class MeasurementResource(resources.ModelResource):
 
         # Case-insensitive: an exact-match lookup created D01BIS alongside the
         # existing D01bis in the 2026 import, splitting that stake's history in
-        # two and losing its displacement in points_movement_*.
+        # two and losing its displacement in point_movements.
         point = Point.objects.filter(label__iexact=point_label).first()
         created = point is None
         if created:
