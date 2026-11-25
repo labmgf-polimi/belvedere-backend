@@ -236,6 +236,50 @@ class ChangeListMapMixin:
         return response
 
 
+def photo_preview(photo: MeasurementPhoto | None) -> str:
+    """Thumbnail linking to the full photo, both via the stable photo URL."""
+    if not photo or not photo.pk or not photo.image:
+        return "-"
+    url = photo.get_absolute_url()
+    # Full-size file scaled by the browser; server-side thumbnails are a TODO.
+    return format_html(
+        '<a href="{}" target="_blank" rel="noopener noreferrer">'
+        '<img src="{}" alt="{}" loading="lazy" '
+        'style="max-height:160px; max-width:240px; border:1px solid #ccc;"></a>',
+        url,
+        url,
+        photo.file_name,
+    )
+
+
+class MeasurementPhotoInline(admin.TabularInline):
+    """Add photos in the empty rows, replace by choosing a new file, remove with Delete."""
+
+    model = MeasurementPhoto
+    extra = 1
+    fields = ("image", "preview", "file_name", "uploaded_at")
+    readonly_fields = ("preview", "file_name", "uploaded_at")
+
+    @admin.display(description="Preview")
+    def preview(self, obj: MeasurementPhoto) -> str:
+        return photo_preview(obj)
+
+
+class HasPhotosFilter(admin.SimpleListFilter):
+    title = "photos"
+    parameter_name = "has_photos"
+
+    def lookups(self, request: HttpRequest, model_admin) -> list[tuple[str, str]]:
+        return [("yes", "With photos"), ("no", "Without photos")]
+
+    def queryset(self, request: HttpRequest, queryset: QuerySet) -> QuerySet:
+        if self.value() == "yes":
+            return queryset.filter(photos__isnull=False).distinct()
+        if self.value() == "no":
+            return queryset.filter(photos__isnull=True)
+        return queryset
+
+
 @admin.register(Measurement)
 class MeasurementAdmin(ChangeListMapMixin, ImportExportMixin, gis_admin.GISModelAdmin):
     resource_classes = [MeasurementResource]
@@ -257,6 +301,7 @@ class MeasurementAdmin(ChangeListMapMixin, ImportExportMixin, gis_admin.GISModel
         "north",
         "h",
         "meas_strategy",
+        "photo_count",
         "created_at",
     )
     search_fields = (
@@ -267,7 +312,8 @@ class MeasurementAdmin(ChangeListMapMixin, ImportExportMixin, gis_admin.GISModel
         "notes",
         "meas_strategy",
     )
-    list_filter = ("survey", "meas_date", "meas_strategy")
+    list_filter = ("survey", "meas_date", "meas_strategy", HasPhotosFilter)
+    inlines = [MeasurementPhotoInline]
     raw_id_fields = ("point", "survey")
     ordering = ("-meas_date", "-id")
     readonly_fields = ("created_at", "enu_coordinates")
@@ -275,6 +321,13 @@ class MeasurementAdmin(ChangeListMapMixin, ImportExportMixin, gis_admin.GISModel
     @admin.display(description="SRID 990001")
     def enu_coordinates(self, obj) -> str:
         return format_enu_point(obj.geom_enu)
+
+    def get_queryset(self, request: HttpRequest) -> QuerySet[Measurement]:
+        return super().get_queryset(request).annotate(_photo_count=Count("photos"))
+
+    @admin.display(ordering="_photo_count", description="Photos")
+    def photo_count(self, obj: Measurement) -> int:
+        return getattr(obj, "_photo_count", 0)
 
     fieldsets = (
         (
@@ -315,23 +368,29 @@ class MeasurementAdmin(ChangeListMapMixin, ImportExportMixin, gis_admin.GISModel
 
 @admin.register(MeasurementPhoto)
 class MeasurementPhotoAdmin(admin.ModelAdmin):
-    list_display = ("id", "measurement", "file_name", "path", "image_preview")
-    search_fields = ("id", "measurement__id", "file_name", "path")
+    list_display = ("id", "measurement", "file_name", "uploaded_at", "preview")
+    list_select_related = ("measurement",)
+    search_fields = ("id", "measurement__id", "measurement__point__label", "file_name")
+    list_filter = ("uploaded_at", "measurement__survey")
     raw_id_fields = ("measurement",)
-    readonly_fields = ("path", "file_name", "image_preview")
-    fields = ("measurement", "image", "image_preview", "path", "file_name")
+    fields = (
+        "measurement",
+        "image",
+        "preview",
+        "file_name",
+        "uploaded_at",
+        "image_key",
+    )
+    readonly_fields = ("preview", "file_name", "uploaded_at", "image_key")
+    ordering = ("-uploaded_at", "-id")
 
-    def image_preview(self, obj):
-        if obj and obj.image:
-            return format_html(
-                '<a href="{}" target="_blank" rel="noopener noreferrer">Open image</a><br>'
-                '<img src="{}" style="max-height:220px; max-width:220px; border:1px solid #ccc;" />',
-                obj.image.url,
-                obj.image.url,
-            )
-        return "-"
+    @admin.display(description="Preview")
+    def preview(self, obj: MeasurementPhoto) -> str:
+        return photo_preview(obj)
 
-    image_preview.short_description = "Preview"
+    @admin.display(description="S3 key")
+    def image_key(self, obj: MeasurementPhoto) -> str:
+        return obj.image.name if obj.image else "-"
 
 
 class BaseProductAdmin(admin.ModelAdmin):

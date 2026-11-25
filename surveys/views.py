@@ -1,10 +1,16 @@
+from django.conf import settings
+from django.contrib.admin.views.decorators import staff_member_required
 from django.db.models import QuerySet
+from django.http import HttpRequest, HttpResponseRedirect
+from django.shortcuts import get_object_or_404, redirect
 from rest_framework.decorators import api_view
 from rest_framework.generics import ListAPIView
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from .models import Measurement, Survey
+from image_index.s3_utils import build_readonly_s3_client, generate_presigned_url
+
+from .models import Measurement, MeasurementPhoto, Survey
 from .serializers import MeasurementSerializer
 from .utils.velocity import compute_point_velocities
 
@@ -57,3 +63,26 @@ def point_velocity(request: Request, label: str) -> Response:
         .order_by("survey__date")
     )
     return Response(compute_point_velocities(measurements))
+
+
+#: Lifetime of the presigned S3 link a photo URL redirects to, seconds.
+PHOTO_LINK_SECONDS = 900
+
+
+# TODO: public access — drop the staff check (and consider proxying the bytes)
+# once the photos are meant to be visible outside the admin.
+@staff_member_required
+def measurement_photo(request: HttpRequest, pk: int) -> HttpResponseRedirect:
+    """Stable URL of a photo: redirects to a short-lived presigned S3 link.
+
+    The bucket is private and presigned links expire, so this is the URL to
+    link to or store; the browser then downloads straight from S3.
+    """
+    photo = get_object_or_404(MeasurementPhoto, pk=pk)
+    url = generate_presigned_url(
+        build_readonly_s3_client(),
+        settings.S3_SURVEYS_BUCKET_NAME,
+        photo.image.name,
+        expires_in=PHOTO_LINK_SECONDS,
+    )
+    return redirect(url)

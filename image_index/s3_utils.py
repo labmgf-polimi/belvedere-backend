@@ -1,6 +1,17 @@
 import boto3
 from botocore.client import BaseClient, Config
 from django.conf import settings
+from storages.backends.s3 import S3Storage
+
+
+def _client_config() -> Config:
+    return Config(
+        signature_version="s3v4",
+        s3={
+            "addressing_style": "virtual",
+            "payload_signing_enabled": False,
+        },
+    )
 
 
 def _make_s3_client(access_key: str, secret_key: str) -> BaseClient:
@@ -10,13 +21,25 @@ def _make_s3_client(access_key: str, secret_key: str) -> BaseClient:
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         region_name=settings.S3_REGION_NAME,
-        config=Config(
-            signature_version="s3v4",
-            s3={
-                "addressing_style": "virtual",
-                "payload_signing_enabled": False,
-            },
-        ),
+        config=_client_config(),
+    )
+
+
+def build_s3_storage(bucket: str) -> S3Storage:
+    """Django file storage on `bucket`, with the same client setup as above.
+
+    Private objects, presigned `.url`, and no silent overwrite of an existing key.
+    """
+    return S3Storage(
+        bucket_name=bucket,
+        endpoint_url=settings.S3_ENDPOINT_URL,
+        access_key=settings.S3_ACCESS_KEY,
+        secret_key=settings.S3_SECRET_KEY,
+        region_name=settings.S3_REGION_NAME,
+        client_config=_client_config(),
+        default_acl=None,
+        querystring_auth=True,
+        file_overwrite=False,
     )
 
 

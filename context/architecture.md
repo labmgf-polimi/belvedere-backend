@@ -176,6 +176,26 @@ survey area, `ST_Transform(geom_enu, 32632)` is off by:
   (`bucket`, `object_key`, etag/size, `is_uploaded`); bucket
   `S3_PRODUCTS_BUCKET_NAME` (default `belvedere-products`, not yet created);
   synced by `manage.py index_s3_products [--bucket B] [--dry-run]`.
+- `MeasurementPhoto` (`measurement_photos`) — **several photos per
+  measurement** (FK, `related_name="photos"`). Files live in the private
+  bucket `S3_SURVEYS_BUCKET_NAME` (`belvedere-surveys`) under
+  `S3_MEASUREMENT_PHOTOS_PREFIX` (`measurement_photos/`), key
+  `<prefix><measurement_id>/<uuid><ext>` — a new key per upload, so a replaced
+  photo is never served from cache. Storage is django-storages S3 built by
+  `image_index.s3_utils.build_s3_storage()` (same client config as the other
+  S3 helpers); `STORAGES["default"]` is local filesystem only so nothing else
+  writes to S3. `file_name` is the original upload name. Django never deletes
+  files by itself, so the model deletes the old object on replace and a
+  `post_delete` receiver deletes it with the row (also on cascade from
+  `Measurement`), both in `transaction.on_commit(robust=True)`.
+  Stable URL `/surveys/photos/<id>/` (staff only) redirects to a 15-minute
+  presigned link; the admin (inline on the Measurement form, standalone
+  photo page) only ever links to it. Local development uses
+  `S3_MEASUREMENT_PHOTOS_PREFIX=dev/measurement_photos/`.
+  TODO: public access; downscaling / EXIF rotation / thumbnails; HEIC
+  (rejected by Pillow today); QGIS (`photo_url` in `points_measurements`,
+  relation on `measurements`); `photo_url` in `/surveys/measurements/`;
+  orphaned-object cleanup command.
 - Unmanaged read-only models over the Postgres views (`PointsMeasurement`,
   `PointsMovementRaw`, `PointsMovementFiltered`, `ActivePoint`) — browse-only
   admin pages; view DDL lives in migration `0011_adopt_views`.

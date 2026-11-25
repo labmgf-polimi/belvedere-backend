@@ -1,9 +1,18 @@
 import os
+import uuid
 
+from django.conf import settings
 from django.contrib.gis.db import models
+from django.core.files.storage import Storage
+from django.db import transaction
 from django.db.models.functions import Lower, Trim
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
+from django.urls import reverse
+from django.utils import timezone
 
 from georef.constants import ENU_SRID, PROJECT_SRID
+from image_index.s3_utils import build_s3_storage
 from surveys.sql import COLUMN_COMMENTS as DOC
 from surveys.sql import TABLE_COMMENTS
 
@@ -211,53 +220,92 @@ class Measurement(models.Model):
         )
 
 
-def measurement_photo_upload_to(instance, filename):
-    measurement_id = instance.measurement_id or "unassigned"
-    _, ext = os.path.splitext(filename)
-    ext = ext.lower() or ".jpg"
-    return f"measurements/{measurement_id}/photos/measurement_{measurement_id}{ext}"
+def photo_storage() -> Storage:
+    """S3 storage of the measurement photos (private surveys bucket)."""
+    return build_s3_storage(settings.S3_SURVEYS_BUCKET_NAME)
+
+
+def measurement_photo_upload_to(instance: "MeasurementPhoto", filename: str) -> str:
+    """S3 key `<prefix><measurement_id>/<uuid><ext>`.
+
+    A new key per upload, so a replaced photo can never be served from a cache
+    under the old name.
+    """
+    ext = os.path.splitext(filename)[1].lower() or ".jpg"
+    return (
+        f"{settings.S3_MEASUREMENT_PHOTOS_PREFIX}"
+        f"{instance.measurement_id}/{uuid.uuid4().hex}{ext}"
+    )
+
+
+def _delete_photo_file(storage: Storage, name: str) -> None:
+    """Delete an S3 object once the transaction commits.
+
+    Never before: a rolled-back save must not lose a file that is still
+    referenced. `robust` logs an S3 failure instead of failing the request.
+    """
+    transaction.on_commit(lambda: storage.delete(name), robust=True)
 
 
 class MeasurementPhoto(models.Model):
+    """One photo of a measurement; a measurement can have several."""
+
     id = models.AutoField(primary_key=True)
-    measurement = models.OneToOneField(
+    measurement = models.ForeignKey(
         "Measurement",
         on_delete=models.CASCADE,
-        null=True,
-        blank=True,
-        related_name="photo",
+        related_name="photos",
+        db_comment=DOC["measurement_id"],
     )
     image = models.ImageField(
         upload_to=measurement_photo_upload_to,
-        blank=True,
-        null=True,
+        storage=photo_storage,
+        max_length=255,
+        db_comment=DOC["image"],
     )
-    path = models.CharField(max_length=254, blank=True, null=True, editable=False)
-    file_name = models.CharField(max_length=254, blank=True, null=True, editable=False)
+    file_name = models.CharField(
+        max_length=254, blank=True, editable=False, db_comment=DOC["file_name"]
+    )
+    uploaded_at = models.DateTimeField(
+        null=True, editable=False, db_comment=DOC["uploaded_at"]
+    )
 
     class Meta:
         db_table = "measurement_photos"
-        verbose_name = "Measurement Monograph Photo"
+        db_table_comment = TABLE_COMMENTS["measurement_photos"]
+        verbose_name = "Measurement photo"
+        ordering = ("measurement_id", "uploaded_at", "id")
 
-    def save(self, *args, **kwargs):
+    def save(self, *args, **kwargs) -> None:
+        replaced = None
+        if self.image and not self.image._committed:
+            # Before upload_to renames it, the name is the uploaded file's.
+            self.file_name = os.path.basename(self.image.name)[:254]
+            self.uploaded_at = timezone.now()
+            if self.pk:
+                replaced = (
+                    MeasurementPhoto.objects.filter(pk=self.pk)
+                    .values_list("image", flat=True)
+                    .first()
+                )
         super().save(*args, **kwargs)
+        if replaced and replaced != self.image.name:
+            _delete_photo_file(self.image.storage, replaced)
 
-        updates = []
-        if self.image:
-            if self.path != self.image.name:
-                self.path = self.image.name
-                updates.append("path")
-
-            filename = os.path.basename(self.image.name)
-            if self.file_name != filename:
-                self.file_name = filename
-                updates.append("file_name")
-
-        if updates:
-            super().save(update_fields=updates)
+    def get_absolute_url(self) -> str:
+        return reverse("surveys:measurement-photo", args=[self.pk])
 
     def __str__(self):
-        return f"MeasurementPhoto {self.pk} - Measurement {self.measurement_id}"
+        return f"Photo {self.pk} of measurement {self.measurement_id}"
+
+
+@receiver(post_delete, sender=MeasurementPhoto)
+def delete_photo_file_with_row(
+    sender: type[MeasurementPhoto], instance: MeasurementPhoto, **kwargs
+) -> None:
+    """Remove the S3 object with its row, including cascades from Measurement."""
+    if instance.image:
+        _delete_photo_file(instance.image.storage, instance.image.name)
 
 
 # ================ Survey Products and Volumes ================

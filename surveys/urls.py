@@ -17,7 +17,12 @@ Including another URLconf
 
 from django.urls import path
 
-from .views import MeasurementListView, point_velocity, survey_years
+from .views import (
+    MeasurementListView,
+    measurement_photo,
+    point_velocity,
+    survey_years,
+)
 
 app_name = "surveys"
 
@@ -25,4 +30,5 @@ urlpatterns = [
     path("years/", survey_years, name="years"),
     path("measurements/", MeasurementListView.as_view(), name="measurements"),
     path("points/<str:label>/velocity/", point_velocity, name="point-velocity"),
+    path("photos/<int:pk>/", measurement_photo, name="measurement-photo"),
 ]

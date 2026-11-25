@@ -1,13 +1,17 @@
 import datetime
+from io import BytesIO
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
+from PIL import Image as PILImage
 from rest_framework.test import APITestCase
 
 from surveys.models import (
     ActivePoint,
     Measurement,
+    MeasurementPhoto,
     Point,
     PointsMeasurement,
     PointsMovementFiltered,
@@ -401,3 +405,139 @@ class MeasurementMapTests(TestCase):
         # The mixin's template must not drop the import-export buttons.
         response = self.client.get(reverse("admin:surveys_measurement_changelist"))
         self.assertContains(response, reverse("admin:surveys_measurement_import"))
+
+
+def _jpeg(name: str = "IMG_0001.JPG") -> SimpleUploadedFile:
+    """A tiny valid JPEG upload."""
+    buffer = BytesIO()
+    PILImage.new("RGB", (8, 8), "red").save(buffer, format="JPEG")
+    return SimpleUploadedFile(name, buffer.getvalue(), content_type="image/jpeg")
+
+
+@override_settings(
+    S3_ENDPOINT_URL="https://fake-s3.example",
+    S3_ACCESS_KEY="key",
+    S3_SECRET_KEY="secret",
+    S3_READONLY_ACCESS_KEY="",
+    S3_READONLY_SECRET_KEY="",
+    S3_SURVEYS_BUCKET_NAME="bkt",
+    S3_MEASUREMENT_PHOTOS_PREFIX="measurement_photos/",
+)
+class MeasurementPhotoTests(TestCase):
+    """Photos are uploaded through the admin, kept in S3 and cleaned up with their row."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from django.contrib.auth.models import User
+
+        cls.admin = User.objects.create_superuser("admin", "a@example.com", "pw")
+        survey = Survey.objects.create(date=datetime.date(2025, 7, 20), year=2025)
+        point = Point.objects.create(label="D12", active=True, is_fixed=False)
+        coords = {"east": 416125.449, "north": 5089423.209, "h": 2121.0}
+        cls.measurement = Measurement.objects.create(
+            point=point, survey=survey, **coords
+        )
+        cls.other = Measurement.objects.create(point=point, survey=survey, **coords)
+
+    def setUp(self):
+        from django.core.files.storage import InMemoryStorage
+
+        field = MeasurementPhoto._meta.get_field("image")
+        original, field.storage = field.storage, InMemoryStorage()
+        self.addCleanup(setattr, field, "storage", original)
+        self.storage = field.storage
+        self.client.force_login(self.admin)
+
+    def _photo(self, measurement=None) -> MeasurementPhoto:
+        return MeasurementPhoto.objects.create(
+            measurement=measurement or self.measurement, image=_jpeg()
+        )
+
+    def test_admin_upload_stores_file_under_measurement_prefix(self):
+        response = self.client.post(
+            reverse("admin:surveys_measurementphoto_add"),
+            {"measurement": self.measurement.pk, "image": _jpeg("IMG_0042.JPG")},
+        )
+        self.assertEqual(response.status_code, 302)
+        photo = MeasurementPhoto.objects.get()
+        self.assertEqual(photo.file_name, "IMG_0042.JPG")
+        self.assertIsNotNone(photo.uploaded_at)
+        self.assertRegex(
+            photo.image.name,
+            rf"^measurement_photos/{self.measurement.pk}/[0-9a-f]{{32}}\.jpg$",
+        )
+        self.assertTrue(self.storage.exists(photo.image.name))
+
+    def test_admin_rejects_non_image(self):
+        response = self.client.post(
+            reverse("admin:surveys_measurementphoto_add"),
+            {
+                "measurement": self.measurement.pk,
+                "image": SimpleUploadedFile("notes.jpg", b"not an image"),
+            },
+        )
+        self.assertEqual(response.status_code, 200)  # form redisplayed with error
+        self.assertFalse(MeasurementPhoto.objects.exists())
+
+    def test_measurement_can_have_several_photos(self):
+        self._photo()
+        self._photo()
+        self.assertEqual(self.measurement.photos.count(), 2)
+
+    def test_replacing_deletes_old_file(self):
+        photo = self._photo()
+        old_name = photo.image.name
+        with self.captureOnCommitCallbacks(execute=True):
+            photo.image = _jpeg("IMG_0002.JPG")
+            photo.save()
+        self.assertNotEqual(photo.image.name, old_name)
+        self.assertEqual(photo.file_name, "IMG_0002.JPG")
+        self.assertFalse(self.storage.exists(old_name))
+        self.assertTrue(self.storage.exists(photo.image.name))
+
+    def test_deleting_photo_or_measurement_deletes_files(self):
+        kept = self._photo()
+        photo = self._photo(self.other)
+        cascaded = self._photo(self.other)
+        with self.captureOnCommitCallbacks(execute=True):
+            photo.delete()
+        self.assertFalse(self.storage.exists(photo.image.name))
+        with self.captureOnCommitCallbacks(execute=True):
+            self.other.delete()
+        self.assertFalse(self.storage.exists(cascaded.image.name))
+        self.assertTrue(self.storage.exists(kept.image.name))
+
+    def test_photo_url_redirects_staff_to_presigned_link(self):
+        photo = self._photo()
+        url = reverse("surveys:measurement-photo", args=[photo.pk])
+        self.assertEqual(photo.get_absolute_url(), url)
+
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(photo.image.name, response["Location"])
+        self.assertIn("X-Amz-Signature=", response["Location"])
+
+        self.assertEqual(
+            self.client.get(
+                reverse("surveys:measurement-photo", args=[999])
+            ).status_code,
+            404,
+        )
+        self.client.logout()
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse("admin:login"), response["Location"])
+
+    def test_measurement_admin_shows_photos(self):
+        self._photo()
+        changelist = reverse("admin:surveys_measurement_changelist")
+        response = self.client.get(changelist, {"has_photos": "yes"})
+        self.assertEqual(response.context["cl"].result_count, 1)
+        response = self.client.get(changelist, {"has_photos": "no"})
+        self.assertEqual(response.context["cl"].result_count, 1)
+
+        response = self.client.get(
+            reverse("admin:surveys_measurement_change", args=[self.measurement.pk])
+        )
+        self.assertContains(response, 'name="photos-TOTAL_FORMS"')
+        self.assertContains(response, "IMG_0001.JPG")

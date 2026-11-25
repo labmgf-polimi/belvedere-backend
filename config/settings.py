@@ -35,6 +35,13 @@ S3_PRODUCTS_BUCKET_NAME = config(
     "S3_PRODUCTS_BUCKET_NAME", default="belvedere-products"
 )
 S3_REGION_NAME = config("S3_REGION_NAME", default="nbg1")
+# Measurement photos: private bucket, objects under this prefix. Local
+# development sets a separate prefix (e.g. dev/measurement_photos/) so test
+# uploads never mix with real photos.
+S3_SURVEYS_BUCKET_NAME = config("S3_SURVEYS_BUCKET_NAME", default="belvedere-surveys")
+S3_MEASUREMENT_PHOTOS_PREFIX = config(
+    "S3_MEASUREMENT_PHOTOS_PREFIX", default="measurement_photos/"
+)
 
 # Email, used by the admin password reset. The console backend prints messages
 # (reset link included) to the server log, so nothing is sent until SMTP is set.
@@ -181,7 +188,12 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# Measurement photos use their own S3 storage (surveys.models.photo_storage);
+# "default" only exists so nothing else can fail on a missing storage.
+MEDIA_ROOT = BASE_DIR / "media"
+
 STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },

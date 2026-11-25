@@ -40,6 +40,11 @@ COLUMN_COMMENTS: dict[str, str] = {
     "datum_realization": "Reference frame realization the campaign was processed in.",
     "height_type": "Whether h is ellipsoidal or orthometric. Ellipsoidal everywhere.",
     "notes": "Free-text notes.",
+    # --- measurement_photos ---
+    "measurement_id": "Measurement the photo belongs to.",
+    "image": "S3 object key of the photo in the surveys bucket (private).",
+    "file_name": "Original name of the uploaded file.",
+    "uploaded_at": "When the current file was uploaded.",
     # --- points ---
     "label": "Point label, e.g. 'D12'.",
     "is_fixed": "True for stable reference marks; false for stakes on moving ice.",
@@ -82,6 +87,7 @@ TABLE_COMMENTS: dict[str, str] = {
     "measurements": "One GNSS measurement of a point during a survey campaign.",
     "points": "Monitoring points: stakes on the glacier and fixed reference marks.",
     "surveys": "Survey campaigns.",
+    "measurement_photos": "Photos of a measurement; files live in the private S3 surveys bucket.",
 }
 
 
