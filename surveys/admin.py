@@ -1,7 +1,7 @@
 from django.contrib import admin, messages
 from django.contrib.gis import admin as gis_admin
 from django.contrib.gis.forms.widgets import OSMWidget
-from django.db import transaction
+from django.db import models, transaction
 from django.db.models import Count, Max, Min, OuterRef, QuerySet, Subquery
 from django.http import HttpRequest, HttpResponse
 from django.urls import reverse
@@ -136,6 +136,32 @@ VELOCITY_CLASSES = {
         {"label": "≥ 20", "max": None, "color": "#51127c"},
     ],
 }
+
+
+def rounded_columns(model: type[models.Model], *fields: str, digits: int = 4):
+    """Class decorator adding `<field>_rounded` list columns.
+
+    Each shows a float field to `digits` decimals, keeps its header, sorting and
+    hover description. Display only: the database keeps full precision.
+    (A plain method named like the field would be ignored — Django resolves
+    model fields first.)
+    """
+
+    def decorate(cls: type) -> type:
+        for field in fields:
+
+            def column(self, obj, field: str = field) -> str | None:
+                value = getattr(obj, field)
+                return None if value is None else f"{value:.{digits}f}"
+
+            label = model._meta.get_field(field).verbose_name
+            name = f"{field}_rounded"
+            setattr(cls, name, admin.display(ordering=field, description=label)(column))
+            if field in getattr(cls, "field_help", {}):
+                cls.field_help = cls.field_help | {name: cls.field_help[field]}
+        return cls
+
+    return decorate
 
 
 def titled_filter(base: type[admin.FieldListFilter], title: str) -> type:
@@ -682,6 +708,7 @@ class ReadOnlyViewAdmin(admin.ModelAdmin):
 
 
 @admin.register(PointMovement)
+@rounded_columns(PointMovement, "d", "v", "a", "v_h", "d_3d", "v_3d")
 class PointMovementAdmin(FieldHelpMixin, ChangeListMapMixin, ReadOnlyViewAdmin):
     """Movements of the moving points.
 
@@ -728,12 +755,12 @@ class PointMovementAdmin(FieldHelpMixin, ChangeListMapMixin, ReadOnlyViewAdmin):
         "date_fin",
         "dt",
         "is_annual",
-        "d",
-        "v",
-        "a",
-        "v_h",
-        "d_3d",
-        "v_3d",
+        "d_rounded",
+        "v_rounded",
+        "a_rounded",
+        "v_h_rounded",
+        "d_3d_rounded",
+        "v_3d_rounded",
     )
     search_fields = ("label",)
     list_filter = (

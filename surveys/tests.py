@@ -252,6 +252,10 @@ class PointMovementViewTests(TestCase):
         # All years by default, annual pairs only (S01 3, S02 3, S03 1): the
         # 92-day remeasure is not drawn.
         self.assertEqual(len(features), 3 + 3 + 1)
+        # Values shown to 4 decimals; sorting still uses the full value.
+        row = PointMovement.objects.filter(label="S01").order_by("date_fin").first()
+        # (The map data keeps the full value; the table cell is rounded.)
+        self.assertContains(response, f'<td class="field-v_rounded">{row.v:.4f}</td>')
         # Headers say which end of the movement the dates and year refer to.
         for header in ("Year (end)", "Start date", "End date"):
             self.assertContains(response, header)
