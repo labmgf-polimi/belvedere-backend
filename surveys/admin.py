@@ -95,9 +95,11 @@ class ChangeListMapMixin:
     #: "classes": [{"label", "max" (exclusive, None = open), "color"}]}.
     map_classes: dict | None = None
 
-    def map_queryset(self, queryset: QuerySet) -> QuerySet:
-        """Rows to plot, from the filtered changelist queryset."""
-        return queryset
+    def map_rows(
+        self, request: HttpRequest, queryset: QuerySet
+    ) -> tuple[QuerySet, str]:
+        """Rows to plot (from the filtered changelist queryset) and the caption."""
+        return queryset, self.map_noun
 
     def changelist_view(
         self, request: HttpRequest, extra_context: dict | None = None
@@ -106,31 +108,32 @@ class ChangeListMapMixin:
         # Redirects and error pages carry no changelist.
         context = getattr(response, "context_data", None)
         if context and "cl" in context:
+            rows, context["map_noun"] = self.map_rows(request, context["cl"].queryset)
             context["map_geojson"] = changelist_geojson(
-                self.map_queryset(context["cl"].queryset),
-                self.map_fields,
-                self.map_url_name,
-                self.map_max_features,
+                rows, self.map_fields, self.map_url_name, self.map_max_features
             )
-            context["map_noun"] = self.map_noun
             context["map_classes"] = self.map_classes
         return response
 
 
 #: Horizontal velocity classes, m/yr, for the movement map. Round breaks that
 #: split the annual velocities (0-31 m/yr, median 6 in 2015-2026) into
-#: comparable groups. Colours: one blue hue, light -> dark = slow -> fast
-#: (an ordinal ramp; validated with the dataviz palette checks).
+#: comparable groups. Colours: one orange hue, light -> dark = slow -> fast (an
+#: ordinal ramp, validated with the dataviz palette checks); orange stands out
+#: on the grey debris cover and green slopes of the satellite imagery, blue did
+#: not. Each movement is drawn as an arrow `arrow_scale_m` map metres long per
+#: m/yr, because true annual displacements are 1-2 pixels at glacier zoom.
 VELOCITY_CLASSES = {
     "property": "v",
     "title": "Horizontal velocity",
     "unit": "m/yr",
+    "arrow_scale_m": 20,
     "classes": [
-        {"label": "< 2", "max": 2, "color": "#86b6ef"},
-        {"label": "2–5", "max": 5, "color": "#5598e7"},
-        {"label": "5–10", "max": 10, "color": "#2a78d6"},
-        {"label": "10–20", "max": 20, "color": "#1c5cab"},
-        {"label": "≥ 20", "max": None, "color": "#0d366b"},
+        {"label": "< 2", "max": 2, "color": "#f39663"},
+        {"label": "2–5", "max": 5, "color": "#e66b35"},
+        {"label": "5–10", "max": 10, "color": "#c9501d"},
+        {"label": "10–20", "max": 20, "color": "#9c3b12"},
+        {"label": "≥ 20", "max": None, "color": "#6a2508"},
     ],
 }
 
@@ -695,12 +698,28 @@ class PointMovementAdmin(FieldHelpMixin, ChangeListMapMixin, ReadOnlyViewAdmin):
     }
     # Links to the later measurement of the pair (the view's id).
     map_url_name = "admin:surveys_measurement_change"
-    map_noun = "annual movement(s) coloured by horizontal velocity (filters apply; intra-annual pairs are not drawn)"
     map_classes = VELOCITY_CLASSES
 
-    def map_queryset(self, queryset: QuerySet) -> QuerySet:
-        # The map shows yearly velocities, which only annual pairs give.
-        return queryset.filter(is_annual=True)
+    def map_rows(
+        self, request: HttpRequest, queryset: QuerySet
+    ) -> tuple[QuerySet, str]:
+        """Annual pairs of one year: the selected survey year, else the latest.
+
+        Yearly velocities only come from annual pairs, and arrows of several
+        years on the same stakes would overlap.
+        """
+        rows = queryset.filter(is_annual=True)
+        year = request.GET.get("survey_year")
+        if year is None:
+            year = rows.aggregate(latest=Max("survey_year"))["latest"]
+            if year is None:
+                return rows, "annual velocities"
+            rows = rows.filter(survey_year=year)
+            return (
+                rows,
+                f"annual velocities of {year} (latest year; pick a survey year for another)",
+            )
+        return rows, f"annual velocities of {year}"
 
     field_help = {column: DOC[column] for column in POINT_MOVEMENTS_COLUMNS}
 

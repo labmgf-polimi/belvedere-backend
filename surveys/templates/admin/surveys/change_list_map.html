@@ -88,12 +88,42 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
         ? `${f.properties.label} · ${f.properties.v.toFixed(1)} m/yr` : f.properties.label;
       const isLine = f => f.geometry.type === "LineString";
 
+      // Arrow from the earlier position along the movement, `scale` map metres
+      // per unit of the class property (m/yr). Local flat-earth approximation:
+      // drawing only, sub-pixel over a few hundred metres.
+      function arrow(f, scale) {
+        const [[lon0, lat0], [lon1, lat1]] = f.geometry.coordinates;
+        const kx = 111320 * Math.cos(lat0 * Math.PI / 180), ky = 110540;  // m per degree
+        const dx = (lon1 - lon0) * kx, dy = (lat1 - lat0) * ky;
+        const norm = Math.hypot(dx, dy) || 1;
+        const ux = dx / norm, uy = dy / norm;
+        const length = f.properties[classes.property] * scale;
+        const tip = [lat0 + uy * length / ky, lon0 + ux * length / kx];
+        const barb = angle => {  // head segment: the shaft direction reversed, rotated
+          const c = Math.cos(angle), s = Math.sin(angle), h = 0.3 * length;
+          return [tip[0] - (ux * s + uy * c) * h / ky, tip[1] - (ux * c - uy * s) * h / kx];
+        };
+        return [[[lat0, lon0], tip], [barb(0.45), tip, barb(-0.45)]];
+      }
+      const scale = classes && classes.arrow_scale_m;
+
       const overlays = {};
       for (const key of keys) {
         const features = data.features.filter(f => keyOf(f) === key);
         if (!features.length) continue;
         const colour = colourOf(key);
         const group = L.layerGroup();
+        if (scale) {
+          for (const f of features.filter(isLine)) {
+            const shape = arrow(f, scale);
+            L.polyline(shape, { color: "#fff", weight: 6, opacity: 0.8, interactive: false }).addTo(group);
+            L.polyline(shape, { color: colour, weight: 3, opacity: 1 })
+              .bindPopup(popup(f)).bindTooltip(tooltip(f)).addTo(group);
+            dot(shape[0][0], colour, 3).bindPopup(popup(f)).bindTooltip(tooltip(f)).addTo(group);
+          }
+          overlays[key + unit] = group.addTo(map);
+          continue;
+        }
         L.geoJSON({ type: "FeatureCollection", features: features.filter(isLine) },
                   { style: () => ({ color: "#fff", weight: 6, opacity: 0.8 }), interactive: false })
           .addTo(group);
@@ -127,6 +157,11 @@ Features carry `label`, `year`, `date`, `h` and `url` properties.
           swatch.style.background = colourOf(key);
           row.append(swatch, key);
           div.append(row);
+        }
+        if (scale) {
+          const note = document.createElement("div");
+          note.textContent = `Arrow length: 10 ${classes.unit} = ${10 * scale} m`;
+          div.append(note);
         }
         return div;
       };
