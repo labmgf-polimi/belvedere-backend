@@ -50,3 +50,10 @@ class PasswordResetTests(TestCase):
         # Same response as a known address: account existence is not revealed.
         self.assertRedirects(response, reverse("password_reset_done"))
         self.assertEqual(len(mail.outbox), 0)
+
+
+class ReferrerPolicyTests(TestCase):
+    def test_cross_site_requests_keep_the_origin(self):
+        # OpenStreetMap blocks map tiles requested without a Referer.
+        response = self.client.get(reverse("admin:login"))
+        self.assertEqual(response["Referrer-Policy"], "strict-origin-when-cross-origin")

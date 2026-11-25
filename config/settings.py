@@ -25,6 +25,12 @@ CSRF_TRUSTED_ORIGINS = config(
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
 
+# Django's default ("same-origin") strips the Referer from cross-site requests,
+# and OpenStreetMap refuses tiles without one ("Access blocked") — the map
+# widgets in the admin. This is the browser default: other sites get only the
+# origin, never the page path.
+SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+
 S3_ENDPOINT_URL = config("S3_ENDPOINT_URL", default="")
 S3_ACCESS_KEY = config("S3_ACCESS_KEY", default="")
 S3_SECRET_KEY = config("S3_SECRET_KEY", default="")
