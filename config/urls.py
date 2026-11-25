@@ -16,9 +16,37 @@ Including another URLconf
 """
 
 from django.contrib import admin
+from django.contrib.auth import views as auth_views
 from django.urls import include, path
 
+# Password reset with Django's built-in views and admin-styled templates.
+# `admin_password_reset` is the name that makes the admin login page show its
+# "Forgotten your login credentials?" link. Must precede admin.site.urls.
+password_reset_urls = [
+    path(
+        "admin/password_reset/",
+        auth_views.PasswordResetView.as_view(),
+        name="admin_password_reset",
+    ),
+    path(
+        "admin/password_reset/done/",
+        auth_views.PasswordResetDoneView.as_view(),
+        name="password_reset_done",
+    ),
+    path(
+        "admin/reset/<uidb64>/<token>/",
+        auth_views.PasswordResetConfirmView.as_view(),
+        name="password_reset_confirm",
+    ),
+    path(
+        "admin/reset/done/",
+        auth_views.PasswordResetCompleteView.as_view(),
+        name="password_reset_complete",
+    ),
+]
+
 urlpatterns = [
+    *password_reset_urls,
     path("admin/", admin.site.urls),
     path("cams/", include("image_index.urls")),
     path("surveys/", include("surveys.urls")),

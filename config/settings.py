@@ -29,6 +29,24 @@ S3_PRODUCTS_BUCKET_NAME = config(
 )
 S3_REGION_NAME = config("S3_REGION_NAME", default="nbg1")
 
+# Email, used by the admin password reset. The console backend prints messages
+# (reset link included) to the server log, so nothing is sent until SMTP is set.
+EMAIL_BACKEND = config(
+    "EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend"
+)
+EMAIL_HOST = config("EMAIL_HOST", default="localhost")
+EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
+EMAIL_USE_SSL = config("EMAIL_USE_SSL", default=False, cast=bool)
+# A hung SMTP server must fail the request before gunicorn's 60 s timeout.
+EMAIL_TIMEOUT = config("EMAIL_TIMEOUT", default=10, cast=int)
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="webmaster@localhost")
+PASSWORD_RESET_TIMEOUT = config("PASSWORD_RESET_TIMEOUT", default=3600, cast=int)
+# The only login page; also the "Log in" link shown after a password reset.
+LOGIN_URL = "admin:login"
+
 # Optional path to a PNG logo file composited onto generated previews (bottom-right corner).
 PREVIEW_LOGO_PATH = config("PREVIEW_LOGO_PATH", default="")
 
