@@ -1,0 +1,111 @@
+{% extends "admin/change_list.html" %}
+{% comment %}
+Changelist with a collapsible Leaflet map, used by ChangeListMapMixin.
+Features carry `label`, `year`, `date`, `h` and `url` properties.
+{% endcomment %}
+
+{% block extrahead %}
+{{ block.super }}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<style>
+  #changelist-map { margin-bottom: 1em; }
+  #changelist-map > summary { cursor: pointer; font-weight: bold; padding: 4px 0; }
+  #changelist-map-canvas { height: 500px; margin-top: 6px; border: 1px solid var(--hairline-color); }
+  #changelist-map-canvas .legend { background: #fff; color: #333; padding: 6px 8px; border-radius: 4px; line-height: 1.5; }
+  #changelist-map-canvas .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if map_geojson %}
+  <details id="changelist-map">
+    <summary>Map — {{ map_geojson.features|length }} point(s), following the current filters and search</summary>
+    <div id="changelist-map-canvas"></div>
+  </details>
+  {{ map_geojson|json_script:"changelist-map-geojson" }}
+  <script>
+  (function () {
+    const details = document.getElementById("changelist-map");
+    const storageKey = "admin-map-open:" + location.pathname;
+    let map = null;
+
+    function buildMap() {
+      const data = JSON.parse(document.getElementById("changelist-map-geojson").textContent);
+      map = L.map("changelist-map-canvas");
+      const baseLayers = {
+        "Satellite (Esri)": L.tileLayer(
+          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          { maxZoom: 19, attribution: "Tiles &copy; Esri" }
+        ),
+        "OpenStreetMap": L.tileLayer(
+          "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+          { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" }
+        ),
+      };
+      baseLayers["Satellite (Esri)"].addTo(map);
+
+      const palette = ["#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231", "#911eb4",
+                       "#46f0f0", "#f032e6", "#bcf60c", "#fabebe", "#008080", "#e6beff"];
+      const years = [...new Set(data.features.map(f => f.properties.year))].sort();
+      const colour = y => palette[years.indexOf(y) % palette.length];
+
+      const overlays = {};
+      for (const year of years) {
+        overlays[String(year)] = L.geoJSON(
+          { type: "FeatureCollection", features: data.features.filter(f => f.properties.year === year) },
+          {
+            pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+              radius: 5, weight: 1, color: "#000", fillColor: colour(year), fillOpacity: 0.9,
+            }),
+            onEachFeature: (f, layer) => {
+              const p = f.properties;
+              const a = document.createElement("a");
+              a.href = p.url;
+              a.textContent = p.label;
+              const box = document.createElement("div");
+              box.append(a, document.createElement("br"),
+                         `${p.date ?? year} · h ${p.h?.toFixed(2)} m`);
+              layer.bindPopup(box);
+              layer.bindTooltip(p.label);
+            },
+          }
+        ).addTo(map);
+      }
+      L.control.layers(baseLayers, overlays).addTo(map);
+
+      const legend = L.control({ position: "bottomright" });
+      legend.onAdd = () => {
+        const div = L.DomUtil.create("div", "legend");
+        for (const y of years) {
+          const row = document.createElement("div");
+          const dot = document.createElement("i");
+          dot.style.background = colour(y);
+          row.append(dot, String(y));
+          div.append(row);
+        }
+        return div;
+      };
+      legend.addTo(map);
+
+      const bounds = L.geoJSON(data).getBounds();
+      if (bounds.isValid()) map.fitBounds(bounds, { padding: [20, 20] });
+      else map.setView([45.96, 7.93], 13);  // Belvedere glacier
+    }
+
+    // Leaflet cannot size itself inside a closed <details>, so the map is
+    // built on first open and resized on later opens.
+    details.addEventListener("toggle", () => {
+      localStorage.setItem(storageKey, details.open ? "1" : "0");
+      if (!details.open) return;
+      if (map) map.invalidateSize();
+      else buildMap();
+    });
+    details.open = localStorage.getItem(storageKey) !== "0";
+  })();
+  </script>
+{% endif %}
+{{ block.super }}
+{% endblock %}

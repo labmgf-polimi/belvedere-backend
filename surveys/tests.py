@@ -339,3 +339,65 @@ class PointDeletionTests(TestCase):
         self.assertEqual(
             Measurement.objects.filter(point_id=self.with_data.pk).count(), 0
         )
+
+
+class MeasurementMapTests(TestCase):
+    """The measurement changelist carries a GeoJSON map of the filtered rows."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from django.contrib.auth.models import User
+
+        cls.admin = User.objects.create_superuser("admin", "a@example.com", "pw")
+        cls.s2024 = Survey.objects.create(date=datetime.date(2024, 7, 20), year=2024)
+        cls.s2025 = Survey.objects.create(date=datetime.date(2025, 7, 20), year=2025)
+        point = Point.objects.create(label="D12", active=True, is_fixed=False)
+        # lat/lon are filled by the compute_measurement_geometry trigger.
+        common = {"point": point, "east": 416125.449, "north": 5089423.209, "h": 2121.0}
+        Measurement.objects.create(survey=cls.s2024, **common)
+        Measurement.objects.create(survey=cls.s2025, **common)
+
+    def test_geojson_is_wgs84_lon_lat(self):
+        from surveys.admin import ChangeListMapMixin, changelist_geojson
+
+        geojson = changelist_geojson(
+            PointsMeasurement.objects.all(),
+            ChangeListMapMixin.map_fields,
+            ChangeListMapMixin.map_url_name,
+            limit=10,
+        )
+        self.assertEqual(len(geojson["features"]), 2)
+        feature = geojson["features"][0]
+        self.assertEqual(feature["properties"]["label"], "D12")
+        lon, lat = feature["geometry"]["coordinates"]
+        # D12 sits at roughly 45.96 N, 7.93 E (GeoJSON order is lon, lat).
+        self.assertAlmostEqual(lat, 45.96, delta=0.02)
+        self.assertAlmostEqual(lon, 7.93, delta=0.02)
+
+    def test_changelist_maps_follow_filters(self):
+        self.client.force_login(self.admin)
+        cases = (
+            (
+                "admin:surveys_measurement_changelist",
+                "survey__id__exact",
+                self.s2024.pk,
+            ),
+            ("admin:surveys_pointsmeasurement_changelist", "survey_year", 2024),
+        )
+        for url_name, filter_key, filter_value in cases:
+            with self.subTest(url_name):
+                url = reverse(url_name)
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertContains(response, 'id="changelist-map-geojson"')
+                features = response.context["map_geojson"]["features"]
+                self.assertEqual(len(features), 2)
+                # Popups link to the editable measurement, also from the view.
+                self.assertIn("/surveys/measurement/", features[0]["properties"]["url"])
+
+                response = self.client.get(url, {filter_key: filter_value})
+                self.assertEqual(len(response.context["map_geojson"]["features"]), 1)
+
+        # The mixin's template must not drop the import-export buttons.
+        response = self.client.get(reverse("admin:surveys_measurement_changelist"))
+        self.assertContains(response, reverse("admin:surveys_measurement_import"))

@@ -3,7 +3,7 @@ from django.contrib.gis import admin as gis_admin
 from django.contrib.gis.forms.widgets import OSMWidget
 from django.db import transaction
 from django.db.models import Count, Max, Min, QuerySet
-from django.http import HttpRequest
+from django.http import HttpRequest, HttpResponse
 from django.urls import reverse
 from django.utils.html import format_html
 from import_export.admin import ImportExportMixin
@@ -163,11 +163,90 @@ class MapWidget(OSMWidget):
         self.attrs.update({"map_width": 800, "map_height": 500})
 
 
+def changelist_geojson(
+    queryset: QuerySet, fields: dict[str, str], url_name: str, limit: int
+) -> dict:
+    """GeoJSON FeatureCollection of `queryset` for the admin changelist map.
+
+    Args:
+        queryset: Rows to plot.
+        fields: Feature property -> ORM lookup. Must contain `lat` and `lon`
+            (WGS 84, computed in the database); the remaining keys become
+            popup properties (`label`, `year`, `date`, `h`).
+        url_name: Admin URL name each feature links to, reversed with the row pk.
+        limit: Maximum number of features.
+    """
+    lat, lon = fields["lat"], fields["lon"]
+    props = {k: v for k, v in fields.items() if k not in ("lat", "lon")}
+    rows = (
+        queryset.filter(**{f"{lat}__isnull": False, f"{lon}__isnull": False})
+        .order_by()
+        .values("pk", *fields.values())[:limit]
+    )
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [r[lon], r[lat]]},
+                "properties": {
+                    **{k: r[v] for k, v in props.items()},
+                    "url": reverse(url_name, args=[r["pk"]]),
+                },
+            }
+            for r in rows
+        ],
+    }
+
+
+class ChangeListMapMixin:
+    """Adds a collapsible Leaflet map of every filtered changelist row.
+
+    The map follows the changelist filters and search but not pagination.
+    Coordinates must be WGS 84 `lat`/`lon` columns filled by the database —
+    never an ENU geometry, which cannot be reprojected correctly.
+    """
+
+    change_list_template = "admin/surveys/change_list_map.html"
+    map_fields: dict[str, str] = {
+        "lat": "lat",
+        "lon": "lon",
+        "label": "label",
+        "year": "survey_year",
+        "date": "meas_date",
+        "h": "h",
+    }
+    # Popups link to the editable measurement, also from the read-only views.
+    map_url_name: str = "admin:surveys_measurement_change"
+    map_max_features: int = 5000
+
+    def changelist_view(
+        self, request: HttpRequest, extra_context: dict | None = None
+    ) -> HttpResponse:
+        response = super().changelist_view(request, extra_context)
+        # Redirects and error pages carry no changelist.
+        context = getattr(response, "context_data", None)
+        if context and "cl" in context:
+            context["map_geojson"] = changelist_geojson(
+                context["cl"].queryset,
+                self.map_fields,
+                self.map_url_name,
+                self.map_max_features,
+            )
+        return response
+
+
 @admin.register(Measurement)
-class MeasurementAdmin(ImportExportMixin, gis_admin.GISModelAdmin):
+class MeasurementAdmin(ChangeListMapMixin, ImportExportMixin, gis_admin.GISModelAdmin):
     resource_classes = [MeasurementResource]
     import_template_name = "admin/surveys/import_measurement.html"
     gis_widget = MapWidget
+    # import-export wraps the mixin's change_list_template, so its buttons stay.
+    map_fields = {
+        **ChangeListMapMixin.map_fields,
+        "label": "point__label",
+        "year": "survey__year",
+    }
 
     list_display = (
         "id",
@@ -300,7 +379,7 @@ class ReadOnlyViewAdmin(admin.ModelAdmin):
 
 
 @admin.register(PointsMeasurement)
-class PointsMeasurementAdmin(ReadOnlyViewAdmin):
+class PointsMeasurementAdmin(ChangeListMapMixin, ReadOnlyViewAdmin):
     list_display = (
         "id",
         "label",
