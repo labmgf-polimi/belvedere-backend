@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+{% comment %}
+Public landing page of the API (/). Keep the endpoint list in step with
+surveys/urls.py and image_index/urls.py.
+{% endcomment %}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Belvedere Glacier – data API</title>
+<style>
+  :root { --ink: #1f2a33; --muted: #5c6b77; --accent: #1f3b5c; --line: #dde3e8; --code: #f3f5f7; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); }
+  header { background: var(--accent); color: #fff; padding: 28px 20px; }
+  header .wrap, main { max-width: 920px; margin: 0 auto; }
+  header h1 { margin: 0 0 4px; font-size: 1.7rem; }
+  header p { margin: 0; opacity: 0.9; }
+  main { padding: 8px 20px 48px; }
+  h2 { margin-top: 34px; padding-bottom: 4px; border-bottom: 1px solid var(--line); color: var(--accent); font-size: 1.25rem; }
+  .links { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 0; padding: 0; list-style: none; }
+  .links a { display: inline-block; padding: 7px 14px; border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); text-decoration: none; }
+  .links a:hover { background: var(--accent); color: #fff; }
+  header .links a { border-color: rgba(255, 255, 255, 0.8); color: #fff; }
+  header .links a:hover { background: #fff; color: var(--accent); }
+  .endpoint { border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin: 14px 0; }
+  .endpoint h3 { margin: 0 0 4px; font: 600 1rem ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .endpoint h3 .m { color: #fff; background: #2e7d4f; border-radius: 4px; padding: 1px 6px; margin-right: 8px; font-size: 0.8rem; }
+  .endpoint p { margin: 4px 0; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 0.92em; }
+  .example { color: var(--muted); font-size: 0.92rem; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.93rem; margin: 8px 0; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .note { color: var(--muted); font-size: 0.92rem; }
+  footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 0.9rem; padding: 18px 20px; text-align: center; }
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <h1>Belvedere Glacier – data API</h1>
+  <p>Monitoring data of the Belvedere Glacier (Macugnaga, VCO, Italy) · LabMGF, Politecnico di Milano</p>
+  <ul class="links">
+    <li><a href="https://thebelvedereglacier.it/">Project website</a></li>
+    <li><a href="https://thebelvedereglacier.it/pages/web-map/">Web map</a></li>
+    <li><a href="https://doi.org/10.5281/zenodo.10817029">Open data on Zenodo</a></li>
+    <li><a href="{% url 'admin:index' %}">Staff admin</a></li>
+  </ul>
+</div></header>
+
+<main>
+<p>This server holds the project's GNSS survey data and time-lapse camera catalogue. The endpoints below
+return JSON, need no key, and can be called from any website (CORS is open).
+{% if first_year and latest_year %}Surveys with measurements cover <strong>{{ first_year }}–{{ latest_year }}</strong>.{% endif %}</p>
+
+<h2>GNSS surveys</h2>
+
+<div class="endpoint">
+  <h3><span class="m">GET</span>/surveys/years/</h3>
+  <p>Years of the survey campaigns that have measurements, ascending.</p>
+  <p class="example">Example: <a href="{% url 'surveys:years' %}">{% url 'surveys:years' %}</a></p>
+</div>
+
+<div class="endpoint">
+  <h3><span class="m">GET</span>/surveys/measurements/</h3>
+  <p>All point measurements, one object per point and survey (not paginated). Parameters:
+     <code>year</code> (survey year), <code>is_fixed</code> (<code>true</code> = stable reference marks,
+     <code>false</code> = points moving with the glacier).</p>
+  {% if latest_year %}<p class="example">Example: <a href="{% url 'surveys:measurements' %}?year={{ latest_year }}&amp;is_fixed=false">{% url 'surveys:measurements' %}?year={{ latest_year }}&amp;is_fixed=false</a></p>{% endif %}
+  <table>
+    <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>id</code>, <code>point_id</code>, <code>label</code></td><td>Measurement id, point id and point label (e.g. <code>D12</code>).</td></tr>
+      <tr><td><code>is_fixed</code></td><td>True for stable reference marks, false for points on moving ice.</td></tr>
+      <tr><td><code>east</code>, <code>north</code></td><td>Position, m, <strong>RDN2008 / UTM zone 32N (EPSG:7791)</strong>.</td></tr>
+      <tr><td><code>h</code></td><td>Ellipsoidal height, m (GRS80).</td></tr>
+      <tr><td><code>h_orto</code></td><td>Orthometric height, m, referred to the <strong>ITALGEO05</strong> geoid.</td></tr>
+      <tr><td><code>lat</code>, <code>lon</code></td><td>Decimal degrees (WGS 84; numerically identical to RDN2008 geographic).</td></tr>
+      <tr><td><code>std_east</code>, <code>std_north</code>, <code>std_h</code></td><td>Standard deviations, m (when available).</td></tr>
+      <tr><td><code>survey_id</code>, <code>survey_date</code>, <code>survey_year</code></td><td>The survey campaign.</td></tr>
+      <tr><td><code>meas_date</code>, <code>meas_time</code></td><td>When the point was measured (<code>meas_time</code> in UTC); often empty for older campaigns.</td></tr>
+      <tr><td><code>meas_strategy</code></td><td>Survey mode, e.g. <code>RTK RADIO</code>, <code>STATICO</code>.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="endpoint">
+  <h3><span class="m">GET</span>/surveys/points/&lt;label&gt;/velocity/</h3>
+  <p>Yearly <strong>horizontal</strong> velocity of a moving point, one object per pair of surveys about a
+     year apart: <code>survey_year</code> (year of the later survey), <code>survey_date_ini</code>,
+     <code>survey_date_fin</code>, <code>v</code> in <strong>metres per day</strong> (× 365.25 for m/yr).
+     Empty for fixed or unknown points.</p>
+  {% if example_point %}<p class="example">Example: <a href="{% url 'surveys:point-velocity' example_point %}">{% url 'surveys:point-velocity' example_point %}</a></p>{% endif %}
+</div>
+
+<h2>Time-lapse cameras</h2>
+
+<div class="endpoint">
+  <h3><span class="m">GET</span>/cams/cameras/</h3>
+  <p>The cameras: <code>id</code>, <code>slug</code>, <code>camera_name</code>, <code>installation_date</code>,
+     <code>is_active</code>. Parameter <code>active=true</code> for active cameras only.</p>
+  <p class="example">Example: <a href="{% url 'image_index:get-camera-list' %}?active=true">{% url 'image_index:get-camera-list' %}?active=true</a></p>
+</div>
+
+<div class="endpoint">
+  <h3><span class="m">GET</span>/cams/images/</h3>
+  <p>Images of a camera, oldest first, paginated (500 per page, <code>page_size</code> up to 1000):
+     <code>id</code>, <code>datetime</code>, <code>filename</code>, <code>width_px</code>, <code>height_px</code>,
+     <code>rotation</code>. Parameters: <code>camera</code> (slug), <code>date_after</code>, <code>date_before</code>
+     (ISO 8601).</p>
+  {% if example_camera %}<p class="example">Example: <a href="{% url 'image_index:get-image-list' %}?camera={{ example_camera }}&amp;page_size=10">{% url 'image_index:get-image-list' %}?camera={{ example_camera }}&amp;page_size=10</a></p>{% endif %}
+</div>
+
+<div class="endpoint">
+  <h3><span class="m">GET</span>/cams/images/&lt;id&gt; · /preview/ · /thumb/</h3>
+  <p>The image itself: the original, a preview (up to 1280 × 960) or a thumbnail (up to 160 × 120).
+     <code>/preview-url/</code> and <code>/thumb-url/</code> return instead a temporary direct link
+     (<code>url</code>, valid <code>expires_in</code> = 900 s).</p>
+</div>
+
+<h2>Use and citation</h2>
+<p>The data and products of the Belvedere monitoring project are published as open data on Zenodo,
+<a href="https://doi.org/10.5281/zenodo.10817029">doi:10.5281/zenodo.10817029</a>, under the GNU GPL v3.0 licence.
+Please cite them, and for the project:</p>
+<p class="note">Gaspari, F., Barbieri, F., Fascia, R., Ioli, F., Pinto, L., and Migliaccio, F. (2025) Strategies for
+Glacier Retreat Communication with 3D Geovisualization and Open Data Sharing, <em>ISPRS Int. J. Geo-Inf.</em>, 14, 75,
+<a href="https://doi.org/10.3390/ijgi14020075">doi:10.3390/ijgi14020075</a>.</p>
+<p class="note">Fair use: anonymous clients are limited to 300 requests per minute on the JSON endpoints. For bulk
+downloads, prefer the Zenodo archive.</p>
+</main>
+
+<footer>LabMGF – Politecnico di Milano</footer>
+</body>
+</html>

@@ -104,3 +104,30 @@ def admin_guide(request: HttpRequest) -> HttpResponse:
     """Database description and how-to, shown inside the admin."""
     context = {**admin.site.each_context(request), "title": "Guide: database and admin"}
     return render(request, "admin/surveys/guide.html", context)
+
+
+def api_home(request: HttpRequest) -> HttpResponse:
+    """Public landing page of the API: endpoints, fields, licence, links."""
+    from image_index.models import Camera
+
+    years = list(
+        Survey.objects.filter(measurement__isnull=False)
+        .order_by("year")
+        .values_list("year", flat=True)
+        .distinct()
+    )
+    # A moving point with yearly velocities, for the example link.
+    example_point = (
+        PointMovement.objects.filter(is_annual=True)
+        .values_list("label", flat=True)
+        .order_by("-survey_year", "label")
+        .first()
+    )
+    camera = Camera.objects.filter(is_active=True).order_by("camera_name").first()
+    context = {
+        "latest_year": years[-1] if years else None,
+        "first_year": years[0] if years else None,
+        "example_point": example_point,
+        "example_camera": camera.slug if camera else None,
+    }
+    return render(request, "surveys/api_home.html", context)

@@ -1489,3 +1489,24 @@ class AdminGuideTests(TestCase):
         self.assertContains(response, "ITALGEO05")
         # Linked from the header of every admin page.
         self.assertContains(self.client.get(reverse("admin:index")), f'href="{url}"')
+
+
+class ApiHomeTests(TestCase):
+    def test_public_landing_page(self):
+        survey = Survey.objects.create(date=datetime.date(2025, 7, 21), year=2025)
+        point = Point.objects.create(label="D12", active=True, is_fixed=True)
+        Measurement.objects.create(
+            point=point, survey=survey, east=416125.449, north=5089423.209, h=2121.172
+        )
+        response = self.client.get("/")  # no login needed
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response, "/surveys/measurements/?year=2025&amp;is_fixed=false"
+        )
+        self.assertContains(response, "EPSG:7791")
+        self.assertContains(response, "ITALGEO05")
+        self.assertContains(response, "doi.org/10.5281/zenodo.10817029")
+        # The admin's "View site" link leads here.
+        from django.contrib import admin
+
+        self.assertEqual(admin.site.site_url, "/")
