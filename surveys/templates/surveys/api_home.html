@@ -93,6 +93,17 @@ return JSON, need no key, and can be called from any website (CORS is open).
   {% if example_point %}<p class="example">Example: <a href="{% url 'surveys:point-velocity' example_point %}">{% url 'surveys:point-velocity' example_point %}</a></p>{% endif %}
 </div>
 
+<h2>Reference systems</h2>
+
+<div class="endpoint">
+  <h3><span class="m">GET</span>/georef/reference-systems/</h3>
+  <p>The coordinate reference systems the data is expressed in (EPSG codes, names, use), the height
+     references (ellipsoidal <code>h</code>, orthometric <code>h_orto</code> on ITALGEO05) and the local
+     glacier frames (ENU, origin on D12) with the PROJ pipeline that converts geographic coordinates to
+     them.</p>
+  <p class="example">Example: <a href="{% url 'georef:reference-systems' %}">{% url 'georef:reference-systems' %}</a></p>
+</div>
+
 <h2>Time-lapse cameras</h2>
 
 <div class="endpoint">

@@ -53,5 +53,6 @@ urlpatterns = [
     path("admin/guide/", admin_guide, name="admin-guide"),
     path("admin/", admin.site.urls),
     path("cams/", include("image_index.urls")),
+    path("georef/", include("georef.urls")),
     path("surveys/", include("surveys.urls")),
 ]

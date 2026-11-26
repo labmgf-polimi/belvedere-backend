@@ -264,6 +264,8 @@ survey area, `ST_Transform(geom_enu, 32632)` is off by:
   `geom_line` (7791) is the displacement line for QGIS; the admin map draws
   the same lines from `lat/lon_prev` -> `lat/lon_fin`.
 
+`GET /georef/reference-systems/` (`georef/views.py`): CRS codes/names/uses (7791, 6706, 4326, 6704), height references, and the local frames with their `proj_pipeline` (input lon/lat degrees + ellipsoidal h). The `+proj=ortho` display definition is deliberately not served.
+
 Public landing page at `/` (`api_home`, template `surveys/api_home.html`; also the admin's "View site"): endpoints with live examples, field meanings, licence/citation, links. Keep it in step with the URLs below.
 
 API under `/surveys/` (plain JSON arrays, no pagination):

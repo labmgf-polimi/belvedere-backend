@@ -369,3 +369,36 @@ class EnuTriggerTests(TestCase):
         low, high = GROUND_STRETCH_BAND
         self.assertGreater(moved / 25.0, low)
         self.assertLess(moved / 25.0, high)
+
+
+class ReferenceSystemsApiTests(TestCase):
+    """GET /georef/reference-systems/ (the frame row comes from georef/0003)."""
+
+    def test_lists_crs_heights_and_frames(self):
+        import pyproj
+        from django.urls import reverse
+
+        response = self.client.get(reverse("georef:reference-systems"))  # public
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["project_crs"], f"EPSG:{PROJECT_SRID}")
+        names = {c["code"]: c["name"] for c in data["crs"]}
+        self.assertEqual(names["EPSG:7791"], "RDN2008 / UTM zone 32N")
+        self.assertIn("EPSG:6704", names)
+        self.assertEqual(data["heights"][1]["reference"], "ITALGEO05 geoid")
+
+        (frame,) = [f for f in data["local_frames"] if f["srid"] == ENU_SRID]
+        self.assertEqual(frame["origin_mark"], "D12")
+        # The pipeline, used as the response describes it, maps the origin
+        # (lon, lat in degrees, ellipsoidal h) onto the false origin.
+        pipeline = pyproj.Transformer.from_pipeline(frame["proj_pipeline"])
+        origin = frame["origin"]
+        east, north, up = pipeline.transform(
+            origin["lon"], origin["lat"], origin["h_ellipsoidal"]
+        )
+        false_origin = frame["false_origin"]
+        self.assertAlmostEqual(east, false_origin["east"], places=6)
+        self.assertAlmostEqual(north, false_origin["north"], places=6)
+        self.assertAlmostEqual(up, false_origin["up"], places=6)
+        # The ortho display definition is deliberately not served.
+        self.assertNotIn("+proj=ortho", response.content.decode())
