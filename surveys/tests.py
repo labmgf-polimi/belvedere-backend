@@ -1442,6 +1442,33 @@ class MonographAdminTests(MonographTests):
             self.client.get(self.url("changelist")), self.url("export_latest")
         )
 
+    def test_point_form_shows_latest_photos(self):
+        photo = MeasurementPhoto.objects.get()
+        response = self.client.get(self.url("change", self.point.pk))
+        self.assertContains(response, "Latest photos")
+        self.assertContains(response, photo.get_absolute_url())
+        self.assertContains(response, "Measured 2026-07-26 (campaign 2026)")
+        self.assertContains(response, "All 1 photo(s) of D01bis")
+        response = self.client.get(
+            self.url("change", Point.objects.get(label="D99").pk)
+        )
+        self.assertContains(response, "No photos yet.")
+
+    def test_point_form_shows_latest_coordinates(self):
+        response = self.client.get(self.url("change", self.point.pk))
+        self.assertContains(response, "Latest data")  # its own section
+        self.assertContains(response, "Latest coordinates")
+        self.assertContains(response, "Measured 2026-07-27 09:11 CEST")
+        self.assertContains(response, "RDN2008 / UTM zone 32N")
+        self.assertContains(response, "415924.862 m")
+        self.assertContains(
+            response, reverse("admin:surveys_measurement_change", args=[self.m2026.pk])
+        )
+        response = self.client.get(
+            self.url("change", Point.objects.get(label="D99").pk)
+        )
+        self.assertContains(response, "Not measured yet.")
+
     def test_requires_staff(self):
         self.client.logout()
         response = self.client.get(self.url("monograph", self.point.pk))

@@ -11,10 +11,11 @@ from django.contrib.gis.forms.widgets import OSMWidget
 from django.core.exceptions import PermissionDenied
 from django.db import models, transaction
 from django.db.models import Count, Max, Min, OuterRef, QuerySet, Subquery
+from django.db.models.functions import Coalesce
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import redirect
 from django.urls import path, reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 from import_export.admin import ImportExportMixin
 
 from georef.enu import format_enu_point
@@ -32,8 +33,16 @@ from .models import (
     Survey,
     SurveyHasInstrument,
     Volume,
+    latest_measurement,
 )
-from .monographs import natural_key, prepare, render_html, write_pdf
+from .monographs import (
+    coordinate_blocks,
+    measured_at,
+    natural_key,
+    prepare,
+    render_html,
+    write_pdf,
+)
 from .resources import MeasurementResource
 from .sql import COLUMN_COMMENTS as DOC
 from .sql import POINT_MOVEMENTS_COLUMNS, POINT_MOVEMENTS_COMMENTS
@@ -385,6 +394,8 @@ class PointAdmin(FieldHelpMixin, ChangeListMapMixin, admin.ModelAdmin):
     change_form_template = "admin/surveys/point/change_form.html"
     field_help = {
         "monograph_links": "Open the point's monograph, or download it as PDF.",
+        "latest_photos": "Photos from all measurements of this point, newest first.",
+        "latest_coordinates": "Position at the point's latest measurement, EPSG:7791.",
         "first_survey_date": "Date of the first survey that measured this point.",
         "last_survey_date": "Date of the most recent survey that measured this point.",
         "last_east": "Easting at the latest measurement, m, EPSG:7791.",
@@ -441,8 +452,102 @@ class PointAdmin(FieldHelpMixin, ChangeListMapMixin, admin.ModelAdmin):
         "last_survey_date",
         "num_measurements",
         "measurements_link",
+        "latest_coordinates",
+        "latest_photos",
     )
     actions = ("delete_with_measurements",)
+    fieldsets = (
+        (
+            None,
+            {
+                "fields": (
+                    "label", "active", "is_fixed", "ref_date", "notes", "target",
+                    "description", "created_at", "first_survey_date",
+                    "last_survey_date", "num_measurements", "measurements_link",
+                )
+            },
+        ),
+        (
+            "Latest data",
+            {
+                "fields": ("latest_coordinates", "latest_photos"),
+                "description": "From the point's most recent measurement and photos.",
+            },
+        ),
+    )  # fmt: skip
+
+    @admin.display(description="Latest coordinates")
+    def latest_coordinates(self, obj: Point) -> str:
+        """UTM block of the point's latest measurement, as on the monograph."""
+        m = latest_measurement(obj) if obj.pk else None
+        if m is None:
+            return "Not measured yet."
+        utm = coordinate_blocks(m)[0]
+        rows = format_html_join(
+            "",
+            '<tr><td style="padding:2px 16px 2px 0; color:#666">{}</td>'
+            '<td style="padding:2px 8px; text-align:right; font-variant-numeric:tabular-nums">{}</td>'
+            '<td style="padding:2px 0; color:#888">{}</td></tr>',
+            utm["rows"],
+        )
+        return format_html(
+            '<div><a href="{}">Measured {}</a> · campaign {} · survey mode {}</div>'
+            '<div style="margin-top:4px"><strong>{}</strong> {}</div>'
+            '<table style="border:none; margin-top:2px">{}</table>'
+            '<div style="color:#888; font-size:smaller">Orthometric height: ITALGEO05.</div>',
+            reverse("admin:surveys_measurement_change", args=[m.pk]),
+            measured_at(m),
+            m.survey.year,
+            m.meas_strategy or "—",
+            utm["title"],
+            utm["code"],
+            rows,
+        )
+
+    #: Photos shown on the point form, newest first.
+    form_photos = 6
+
+    @admin.display(description="Latest photos")
+    def latest_photos(self, obj: Point) -> str:
+        """The point's photos from all its measurements, newest first."""
+        if not obj.pk:
+            return "-"
+        photos = (
+            MeasurementPhoto.objects.filter(measurement__point=obj)
+            .select_related("measurement__survey")
+            .annotate(
+                day=Coalesce("measurement__meas_date", "measurement__survey__date")
+            )
+            .order_by("-day", "-uploaded_at", "-id")
+        )
+        total = photos.count()
+        if not total:
+            return "No photos yet."
+        cards = format_html_join(
+            "",
+            '<div style="display:inline-block; margin:0 12px 12px 0; vertical-align:top;">'
+            '{}<br><a href="{}">Measured {} (campaign {})</a></div>',
+            (
+                (
+                    photo_preview(p),
+                    reverse(
+                        "admin:surveys_measurement_change", args=[p.measurement_id]
+                    ),
+                    p.day,
+                    p.measurement.survey.year,
+                )
+                for p in photos[: self.form_photos]
+            ),
+        )
+        listing = reverse("admin:surveys_measurementphoto_changelist")
+        return format_html(
+            '{}<div><a href="{}?q={}">All {} photo(s) of {}</a></div>',
+            cards,
+            listing,
+            obj.label,
+            total,
+            obj.label,
+        )
 
     @admin.action(
         description="Delete selected points AND all their measurements",

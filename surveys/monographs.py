@@ -109,6 +109,13 @@ def coordinate_blocks(m: Measurement) -> list[dict]:
     ]
 
 
+def measured_at(m: Measurement) -> str:
+    """Local time of the measurement when known, else its date (or the survey's)."""
+    if m.meas_time:
+        return f"{m.meas_time.astimezone(FIELD_TIME_ZONE):%Y-%m-%d %H:%M %Z}"
+    return f"{m.meas_date or m.survey.date}"
+
+
 @dataclass
 class Monograph:
     point: Point
@@ -120,10 +127,7 @@ class Monograph:
 
     @property
     def measured_at(self) -> str:
-        m = self.measurement
-        if m.meas_time:
-            return f"{m.meas_time.astimezone(FIELD_TIME_ZONE):%Y-%m-%d %H:%M %Z}"
-        return f"{m.meas_date or m.survey.date}"
+        return measured_at(self.measurement)
 
     @property
     def anchor(self) -> str:
