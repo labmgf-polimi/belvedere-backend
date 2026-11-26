@@ -1,0 +1,3 @@
+{% extends "admin/base_site.html" %}
+{% comment %}Adds the "Guide" link to the header of every admin page.{% endcomment %}
+{% block userlinks %}<a href="{% url 'admin-guide' %}">Guide</a> / {{ block.super }}{% endblock %}

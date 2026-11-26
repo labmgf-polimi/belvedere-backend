@@ -1,0 +1,164 @@
+{% extends "admin/base_site.html" %}
+{% comment %}
+Database description and how-to, at /admin/guide/ (linked from the admin header).
+Keep in step with context/architecture.md when the schema or the tools change.
+{% endcomment %}
+
+{% block extrastyle %}{{ block.super }}
+<style>
+  .guide { max-width: 980px; line-height: 1.55; }
+  .guide h2 { margin-top: 28px; padding-bottom: 4px; border-bottom: 1px solid var(--hairline-color); }
+  .guide h3 { margin-top: 18px; }
+  .guide table { width: 100%; margin: 8px 0 12px; }
+  .guide td, .guide th { vertical-align: top; }
+  .guide code { font-size: 0.95em; color: var(--body-fg); }
+  .guide pre { color: var(--body-fg); background: var(--darkened-bg); padding: 12px 14px; border-radius: 4px; line-height: 1.35; overflow-x: auto; }
+  .guide .warn { border-left: 4px solid #c0392b; padding: 6px 12px; background: var(--darkened-bg); }
+  .guide nav ol { columns: 2; }
+</style>
+{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs"><a href="{% url 'admin:index' %}">Home</a> › Guide</div>
+{% endblock %}
+
+{% block content %}
+<div class="guide">
+
+<p>Backend of the <strong>Belvedere Glacier monitoring project</strong> (Macugnaga, VCO): GNSS surveys of a
+network of points on and around the glacier, survey products, and time-lapse camera images. One
+PostgreSQL/PostGIS database is used by this admin, by QGIS (direct connection) and by the public
+web viewers (through the <code>/surveys/</code> and <code>/cams/</code> API).</p>
+
+<nav><ol>
+  <li><a href="#model">Data model</a></li>
+  <li><a href="#crs">Coordinates and heights</a></li>
+  <li><a href="#automatic">What the database computes</a></li>
+  <li><a href="#points">Points</a></li>
+  <li><a href="#measurements">Measurements and photos</a></li>
+  <li><a href="#import">Importing a survey campaign</a></li>
+  <li><a href="#movements">Point movements</a></li>
+  <li><a href="#monographs">Monographs and exports</a></li>
+  <li><a href="#cameras">Cameras and images</a></li>
+  <li><a href="#rules">Rules</a></li>
+  <li><a href="#tools">Command-line tools</a></li>
+</ol></nav>
+
+<h2 id="model">1. Data model</h2>
+<pre>
+surveys ──┬──&lt; measurements &gt;──── points            a measurement = one point in one survey
+(campaign)│        └──&lt; measurement_photos           photo files in S3 (bucket belvedere-surveys)
+          ├──&lt; flights, products_2d, products_3d, volumes
+          └──&lt; surveys_has_instruments &gt;── instruments
+
+image_index_camera ──&lt; image_index_image             camera photos in S3 (bucket belvedere-images)
+                   └─&lt; image_index_cameracalibration
+
+georef_reference_frame                               the local ENU frame (SRID 990001)
+
+Read-only views:  points_measurements · point_movements · active_points
+</pre>
+
+<table>
+  <thead><tr><th>Table</th><th>Contains</th></tr></thead>
+  <tbody>
+    <tr><td><code>surveys</code></td><td>Survey campaigns: date and year.</td></tr>
+    <tr><td><code>points</code></td><td>Monitoring points: label (unique, case-insensitive), <em>active</em>, <em>fixed</em> (stable reference mark) or moving (stake on the glacier), establishment date, and the monograph texts: target, description, notes.</td></tr>
+    <tr><td><code>measurements</code></td><td>One GNSS position of a point in a survey: East, North, ellipsoidal h, σ, measurement date and time, survey mode, notes. Position fields in other systems are derived (see 3).</td></tr>
+    <tr><td><code>measurement_photos</code></td><td>Field photos of a measurement (several allowed), stored upright in S3.</td></tr>
+    <tr><td><code>instruments</code>, <code>surveys_has_instruments</code>, <code>flights</code></td><td>Instruments and drone flights of each campaign.</td></tr>
+    <tr><td><code>products_2d</code>, <code>products_3d</code>, <code>volumes</code></td><td>Survey products (orthophotos, DSMs, point clouds) and volume changes between campaigns.</td></tr>
+    <tr><td><code>image_index_*</code></td><td>Time-lapse cameras, their calibrations and the catalogue of their images.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="crs">2. Coordinates and heights</h2>
+<table>
+  <tbody>
+    <tr><td><strong>Project CRS: EPSG:7791</strong></td><td>RDN2008 / UTM zone 32N (ETRF2000, epoch 2008.0) — the Italian GNSS network's realization. East/North of every measurement are in this system.</td></tr>
+    <tr><td>Heights</td><td><code>h</code> is the <strong>ellipsoidal</strong> height (GRS80); <code>h_orto</code> the <strong>orthometric</strong> height, always referred to <strong>ITALGEO05</strong>.</td></tr>
+    <tr><td>Latitude / longitude</td><td>Shown as WGS 84 (EPSG:4326). The values are numerically identical to RDN2008 geographic (null transformation), but today's WGS 84 / ITRF differs from ETRF2000 by about 0.45 m.</td></tr>
+    <tr><td>Geocentric</td><td>X, Y, Z in RDN2008 (EPSG:6704), on the monographs and in the CSV export.</td></tr>
+    <tr><td>Local ENU (SRID 990001)</td><td>A glacier-local frame with origin on <strong>D12</strong>: true distances, no map distortion. Its <strong>U is not an altitude</strong> (height above the tangent plane at D12 + 1000 m).</td></tr>
+  </tbody>
+</table>
+
+<h2 id="automatic">3. What the database computes</h2>
+<p>When a measurement is saved, database triggers derive from East/North/h: the point geometry, latitude
+and longitude, <code>h_orto</code> (from the ITALGEO05 geoid) and the ENU position. <strong>Edit only East, North
+and h</strong>; the rest follows. Measurement times are stored in UTC and shown in local time (Europe/Rome)
+where marked “local”.</p>
+
+<h2 id="points">4. Points</h2>
+<ul>
+  <li>The list opens on <strong>active points only</strong>. Inactive points are the history of the glacier's movement: choose <em>Status → All points</em> or <em>Inactive (history)</em> to see them.</li>
+  <li>Other filters: fixed/moving, measured in a year, last measured in, number of measurements, with/without photos. The map above the list shows each point at its latest position and follows the filters.</li>
+  <li>The edit form holds the point's texts (target, description, notes) and, under <em>Latest data</em>, its latest coordinates and photos.</li>
+  <li>A point with measurements cannot be deleted by mistake. The action <em>Delete selected points AND all their measurements</em> does it explicitly.</li>
+  <li>Hover over a column header or a field name for its description.</li>
+</ul>
+
+<h2 id="measurements">5. Measurements and photos</h2>
+<ul>
+  <li>Filters: survey year, survey, fixed/active point, survey mode, with photos. The map shows the filtered measurements.</li>
+  <li><strong>Survey mode</strong> (e.g. <em>RTK RADIO</em>, <em>STATICO</em>) belongs to each measurement.</li>
+  <li><strong>Photos</strong>: in a measurement's form, add a photo in the empty row, replace one by choosing a new file, remove one with <em>Delete</em>. Photos are private; the links in the admin work for staff only.</li>
+</ul>
+
+<h2 id="import">6. Importing a survey campaign</h2>
+<ol>
+  <li><strong>Create the survey</strong> (Surveys → Add): date and year.</li>
+  <li><strong>Import the measurements</strong> from CSV: Measurements → <em>Import</em>. Columns: <code>point_label</code>, <code>survey_id</code> <em>or</em> <code>survey_date</code> (DD/MM/YYYY, of an existing survey), <code>east</code>, <code>north</code>, <code>h</code>, optional <code>std_east</code>, <code>std_north</code>, <code>std_h</code>, <code>meas_date</code>, <code>meas_strategy</code>, <code>notes</code>. Labels match case-insensitively; an unknown label creates a new point (check it afterwards). The import shows a preview before confirming.</li>
+  <li><strong>Field photos</strong> of the campaign (named <code>Img_&lt;LABEL&gt;_&lt;DDMMYY&gt;_&lt;HHMMSS&gt;.jpg</code>) are attached with the command <code>import_point_photos</code> (see 11), which also sets each measurement's time.</li>
+  <li>Update the <strong>active</strong> flag of points that are lost or replaced.</li>
+</ol>
+
+<h2 id="movements">7. Point movements</h2>
+<p><em>Point movements</em> lists every moving point between two consecutive measurements: horizontal
+displacement <code>d</code> and velocity <code>v</code> (the main values, m and m/yr), the vertical part
+(<code>d_h</code>, <code>v_h</code>), 3D values that include glacier surface lowering, and the acceleration
+<code>a</code> (m/yr², between consecutive yearly intervals). <em>Year (end)</em> is the year of the later
+measurement. <em>Is annual</em> marks pairs about one year apart. The map draws all yearly movements,
+coloured by velocity class. Fixed points are not included.</p>
+
+<h2 id="monographs">8. Monographs and exports</h2>
+<ul>
+  <li><strong>One point</strong>: <em>View monograph</em> / <em>Export monograph PDF</em> at the top of its form, or <em>View · PDF</em> in the Points list.</li>
+  <li><strong>Many points</strong>: <em>View monographs</em> / <em>Export monographs PDF</em> on the Points list cover the points currently listed (filters apply), in one document with an index.</li>
+  <li><strong>CSV</strong>: <em>Export CSV</em> on the Points list: the listed points with everything about their latest measurement.</li>
+  <li>A monograph uses the point's latest measurement and its two most recent photos; empty boxes mean no photo yet.</li>
+</ul>
+
+<h2 id="cameras">9. Cameras and images</h2>
+<p>Cameras (location, calibration, S3 folder) are managed under <em>Image index</em>. Their images are
+catalogued from the S3 bucket by the command <code>index_s3_images</code>; previews and thumbnails are
+generated on demand.</p>
+
+<h2 id="rules">10. Rules</h2>
+<div class="warn">
+  <ul>
+    <li>The database is shared with <strong>QGIS</strong>: never change tables or views from QGIS or pgAdmin. Structure changes go through the code (migrations).</li>
+    <li>Do not edit the derived fields (latitude/longitude, <code>h_orto</code>, ENU, geometries).</li>
+    <li>In QGIS, never reproject an ENU layer; keep the project CRS at 990001 for ENU data.</li>
+    <li>The local reference frame (on D12) is frozen: it is never changed.</li>
+    <li>Take a backup before large changes (<code>scripts/localdb.sh pull-live</code>).</li>
+  </ul>
+</div>
+
+<h2 id="tools">11. Command-line tools (maintainers)</h2>
+<p>Run from the project folder with <code>uv run python manage.py &lt;command&gt;</code>. Commands that write are dry runs unless given <code>--apply</code>.</p>
+<table>
+  <tbody>
+    <tr><td><code>import_point_photos DIR --year YYYY</code></td><td>Attach a campaign's field photos (upright) and set measurement times.</td></tr>
+    <tr><td><code>import_monograph_texts FILE.pub …</code></td><td>Fill point texts from the Publisher monographs (needs LibreOffice).</td></tr>
+    <tr><td><code>generate_monographs [--until-year Y] [--split]</code></td><td>Monograph PDFs from the command line, also as of an earlier year.</td></tr>
+    <tr><td><code>merge_duplicate_points</code></td><td>Merge points whose labels differ only by case.</td></tr>
+    <tr><td><code>index_s3_images</code></td><td>Catalogue camera images from S3.</td></tr>
+    <tr><td><code>validate_reference_frame</code></td><td>Check the local ENU frame (read-only).</td></tr>
+  </tbody>
+</table>
+<p><code>scripts/localdb.sh</code> runs a local copy of the database: <code>pull-live</code> copies production into it
+(production is only read), <code>run</code> starts the admin on it, <code>test</code> runs the tests.</p>
+
+</div>
+{% endblock %}

@@ -1,8 +1,9 @@
 from django.conf import settings
+from django.contrib import admin
 from django.contrib.admin.views.decorators import staff_member_required
 from django.db.models import QuerySet
-from django.http import HttpRequest, HttpResponseRedirect
-from django.shortcuts import get_object_or_404, redirect
+from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
+from django.shortcuts import get_object_or_404, redirect, render
 from rest_framework.decorators import api_view
 from rest_framework.generics import ListAPIView
 from rest_framework.request import Request
@@ -96,3 +97,10 @@ def measurement_photo(request: HttpRequest, pk: int) -> HttpResponseRedirect:
         expires_in=PHOTO_LINK_SECONDS,
     )
     return redirect(url)
+
+
+@staff_member_required
+def admin_guide(request: HttpRequest) -> HttpResponse:
+    """Database description and how-to, shown inside the admin."""
+    context = {**admin.site.each_context(request), "title": "Guide: database and admin"}
+    return render(request, "admin/surveys/guide.html", context)

@@ -19,6 +19,8 @@ from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.urls import include, path
 
+from surveys.views import admin_guide
+
 # Password reset with Django's built-in views and admin-styled templates.
 # `admin_password_reset` is the name that makes the admin login page show its
 # "Forgotten your login credentials?" link. Must precede admin.site.urls.
@@ -47,6 +49,7 @@ password_reset_urls = [
 
 urlpatterns = [
     *password_reset_urls,
+    path("admin/guide/", admin_guide, name="admin-guide"),
     path("admin/", admin.site.urls),
     path("cams/", include("image_index.urls")),
     path("surveys/", include("surveys.urls")),

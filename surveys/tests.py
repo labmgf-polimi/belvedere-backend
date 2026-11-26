@@ -1473,3 +1473,19 @@ class MonographAdminTests(MonographTests):
         self.client.logout()
         response = self.client.get(self.url("monograph", self.point.pk))
         self.assertEqual(response.status_code, 302)
+
+
+class AdminGuideTests(TestCase):
+    def test_guide_page_and_header_link(self):
+        from django.contrib.auth.models import User
+
+        url = reverse("admin-guide")
+        self.assertEqual(self.client.get(url).status_code, 302)  # staff only
+        self.client.force_login(
+            User.objects.create_superuser("admin", "a@example.com", "pw")
+        )
+        response = self.client.get(url)
+        self.assertContains(response, "Data model")
+        self.assertContains(response, "ITALGEO05")
+        # Linked from the header of every admin page.
+        self.assertContains(self.client.get(reverse("admin:index")), f'href="{url}"')
